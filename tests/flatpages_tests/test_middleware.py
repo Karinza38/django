@@ -10,10 +10,7 @@ from .settings import FLATPAGES_TEMPLATES
 class TestDataMixin:
     @classmethod
     def setUpTestData(cls):
-        # don't use the manager because we want to ensure the site exists
-        # with pk=1, regardless of whether or not it already exists.
-        cls.site1 = Site(pk=1, domain="example.com", name="example.com")
-        cls.site1.save()
+        cls.site1 = Site.objects.get()
         cls.fp1 = FlatPage.objects.create(
             url="/flatpage/",
             title="A Flatpage",
@@ -65,11 +62,13 @@ class TestDataMixin:
     ],
     ROOT_URLCONF="flatpages_tests.urls",
     TEMPLATES=FLATPAGES_TEMPLATES,
-    SITE_ID=1,
 )
 class FlatpageMiddlewareTests(TestDataMixin, TestCase):
     def test_view_flatpage(self):
-        "A flatpage can be served through a view, even when the middleware is in use"
+        """
+        A flatpage can be served through a view, even when the middleware is in
+        use
+        """
         response = self.client.get("/flatpage_root/flatpage/")
         self.assertContains(response, "<p>Isn't it flat!</p>")
 
@@ -144,7 +143,6 @@ class FlatpageMiddlewareTests(TestDataMixin, TestCase):
     ],
     ROOT_URLCONF="flatpages_tests.urls",
     TEMPLATES=FLATPAGES_TEMPLATES,
-    SITE_ID=1,
 )
 class FlatpageMiddlewareAppendSlashTests(TestDataMixin, TestCase):
     def test_redirect_view_flatpage(self):
@@ -161,7 +159,10 @@ class FlatpageMiddlewareAppendSlashTests(TestDataMixin, TestCase):
         self.assertEqual(response.status_code, 404)
 
     def test_redirect_fallback_flatpage(self):
-        "A flatpage can be served by the fallback middleware and should add a slash"
+        """
+        A flatpage can be served by the fallback middleware and should add a
+        slash
+        """
         response = self.client.get("/flatpage")
         self.assertRedirects(response, "/flatpage/", status_code=301)
 
@@ -193,7 +194,10 @@ class FlatpageMiddlewareAppendSlashTests(TestDataMixin, TestCase):
         )
 
     def test_redirect_fallback_flatpage_root(self):
-        "A flatpage at / should not cause a redirect loop when APPEND_SLASH is set"
+        """
+        A flatpage at / should not cause a redirect loop when APPEND_SLASH is
+        set
+        """
         fp = FlatPage.objects.create(
             url="/",
             title="Root",

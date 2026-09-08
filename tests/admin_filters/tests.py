@@ -3,6 +3,7 @@ import sys
 import unittest
 
 from django.contrib.admin import (
+    AdminSite,
     AllValuesFieldListFilter,
     BooleanFieldListFilter,
     EmptyFieldListFilter,
@@ -10,7 +11,6 @@ from django.contrib.admin import (
     ModelAdmin,
     RelatedOnlyFieldListFilter,
     SimpleListFilter,
-    site,
 )
 from django.contrib.admin.filters import FacetsMixin
 from django.contrib.admin.options import IncorrectLookupParameters, ShowFacets
@@ -21,6 +21,9 @@ from django.db import connection, models
 from django.test import RequestFactory, SimpleTestCase, TestCase, override_settings
 
 from .models import Book, Bookmark, Department, Employee, ImprovedBook, TaggedItem
+
+site = AdminSite(name="test_adminfilters")
+site.register(User, UserAdmin)
 
 
 def select_by(dictlist, key, value):
@@ -700,7 +703,7 @@ class ListFiltersTests(TestCase):
         choice = select_by(filterspec.choices(changelist), "display", "alfred")
         self.assertIs(choice["selected"], True)
         self.assertEqual(
-            choice["query_string"], "?author__id__exact=%d" % self.alfred.pk
+            choice["query_string"], "?author__id__exact=%s" % self.alfred.pk
         )
 
     def test_relatedfieldlistfilter_foreignkey_ordering(self):
@@ -803,7 +806,7 @@ class ListFiltersTests(TestCase):
         choice = select_by(filterspec.choices(changelist), "display", "bob")
         self.assertIs(choice["selected"], True)
         self.assertEqual(
-            choice["query_string"], "?contributors__id__exact=%d" % self.bob.pk
+            choice["query_string"], "?contributors__id__exact=%s" % self.bob.pk
         )
 
     def test_relatedfieldlistfilter_reverse_relationships(self):
@@ -839,7 +842,7 @@ class ListFiltersTests(TestCase):
         )
         self.assertIs(choice["selected"], True)
         self.assertEqual(
-            choice["query_string"], "?books_authored__id__exact=%d" % self.bio_book.pk
+            choice["query_string"], "?books_authored__id__exact=%s" % self.bio_book.pk
         )
 
         # M2M relationship -----
@@ -873,7 +876,7 @@ class ListFiltersTests(TestCase):
         self.assertIs(choice["selected"], True)
         self.assertEqual(
             choice["query_string"],
-            "?books_contributed__id__exact=%d" % self.django_book.pk,
+            "?books_contributed__id__exact=%s" % self.django_book.pk,
         )
 
         # With one book, the list filter should appear because there is also a
@@ -910,7 +913,8 @@ class ListFiltersTests(TestCase):
         request.user = self.alfred
         changelist = modeladmin.get_changelist_instance(request)
 
-        # Make sure that only actual authors are present in author's list filter
+        # Make sure that only actual authors are present in author's list
+        # filter
         filterspec = changelist.get_filters(request)[0][4]
         expected = [(self.alfred.pk, "alfred"), (self.bob.pk, "bob")]
         self.assertEqual(sorted(filterspec.lookup_choices), sorted(expected))
@@ -1029,7 +1033,8 @@ class ListFiltersTests(TestCase):
         request.user = self.alfred
         changelist = modeladmin.get_changelist_instance(request)
 
-        # Make sure that only actual contributors are present in contrib's list filter
+        # Make sure that only actual contributors are present in contrib's list
+        # filter
         filterspec = changelist.get_filters(request)[0][5]
         expected = [(self.bob.pk, "bob"), (self.lisa.pk, "lisa")]
         self.assertEqual(sorted(filterspec.lookup_choices), sorted(expected))

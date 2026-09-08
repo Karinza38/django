@@ -79,7 +79,8 @@ class TestTicket14567(TestCase):
         self.assertIsInstance(
             form.cleaned_data["multi_choice_optional"], models.query.QuerySet
         )
-        # While we're at it, test whether a QuerySet is returned if there *is* a value.
+        # While we're at it, test whether a QuerySet is returned if there *is*
+        # a value.
         self.assertIsInstance(form.cleaned_data["multi_choice"], models.query.QuerySet)
 
 
@@ -100,45 +101,46 @@ class ModelFormCallableModelDefault(TestCase):
         The initial value for a callable default returning a queryset is the
         pk.
         """
-        ChoiceOptionModel.objects.create(id=1, name="default")
-        ChoiceOptionModel.objects.create(id=2, name="option 2")
-        ChoiceOptionModel.objects.create(id=3, name="option 3")
+        obj1 = ChoiceOptionModel.objects.create(id=1, name="default")
+        obj2 = ChoiceOptionModel.objects.create(id=2, name="option 2")
+        obj3 = ChoiceOptionModel.objects.create(id=3, name="option 3")
         self.assertHTMLEqual(
             ChoiceFieldForm().as_p(),
-            """
+            f"""
             <p><label for="id_choice">Choice:</label>
             <select name="choice" id="id_choice">
-            <option value="1" selected>ChoiceOption 1</option>
-            <option value="2">ChoiceOption 2</option>
-            <option value="3">ChoiceOption 3</option>
+            <option value="{obj1.pk}" selected>{obj1}</option>
+            <option value="{obj2.pk}">{obj2}</option>
+            <option value="{obj3.pk}">{obj3}</option>
             </select>
-            <input type="hidden" name="initial-choice" value="1" id="initial-id_choice">
+            <input type="hidden" name="initial-choice" value="{obj1.pk}"
+                id="initial-id_choice">
             </p>
             <p><label for="id_choice_int">Choice int:</label>
             <select name="choice_int" id="id_choice_int">
-            <option value="1" selected>ChoiceOption 1</option>
-            <option value="2">ChoiceOption 2</option>
-            <option value="3">ChoiceOption 3</option>
+            <option value="{obj1.pk}" selected>{obj1}</option>
+            <option value="{obj2.pk}">{obj2}</option>
+            <option value="{obj3.pk}">{obj3}</option>
             </select>
-            <input type="hidden" name="initial-choice_int" value="1"
+            <input type="hidden" name="initial-choice_int" value="{obj1.pk}"
                 id="initial-id_choice_int">
             </p>
             <p><label for="id_multi_choice">Multi choice:</label>
             <select multiple name="multi_choice" id="id_multi_choice" required>
-            <option value="1" selected>ChoiceOption 1</option>
-            <option value="2">ChoiceOption 2</option>
-            <option value="3">ChoiceOption 3</option>
+            <option value="{obj1.pk}" selected>{obj1}</option>
+            <option value="{obj2.pk}">{obj2}</option>
+            <option value="{obj3.pk}">{obj3}</option>
             </select>
-            <input type="hidden" name="initial-multi_choice" value="1"
+            <input type="hidden" name="initial-multi_choice" value="{obj1.pk}"
                 id="initial-id_multi_choice_0">
             </p>
             <p><label for="id_multi_choice_int">Multi choice int:</label>
             <select multiple name="multi_choice_int" id="id_multi_choice_int" required>
-            <option value="1" selected>ChoiceOption 1</option>
-            <option value="2">ChoiceOption 2</option>
-            <option value="3">ChoiceOption 3</option>
+            <option value="{obj1.pk}" selected>{obj1}</option>
+            <option value="{obj2.pk}">{obj2}</option>
+            <option value="{obj3.pk}">{obj3}</option>
             </select>
-            <input type="hidden" name="initial-multi_choice_int" value="1"
+            <input type="hidden" name="initial-multi_choice_int" value="{obj1.pk}"
                 id="initial-id_multi_choice_int_0">
             </p>
             """,
@@ -146,9 +148,9 @@ class ModelFormCallableModelDefault(TestCase):
 
     def test_initial_instance_value(self):
         "Initial instances for model fields may also be instances (refs #7287)"
-        ChoiceOptionModel.objects.create(id=1, name="default")
-        obj2 = ChoiceOptionModel.objects.create(id=2, name="option 2")
-        obj3 = ChoiceOptionModel.objects.create(id=3, name="option 3")
+        obj1 = ChoiceOptionModel.objects.create(name="default")
+        obj2 = ChoiceOptionModel.objects.create(name="option 2")
+        obj3 = ChoiceOptionModel.objects.create(name="option 3")
         self.assertHTMLEqual(
             ChoiceFieldForm(
                 initial={
@@ -160,44 +162,45 @@ class ModelFormCallableModelDefault(TestCase):
                     ),
                 }
             ).as_p(),
-            """
+            f"""
             <p><label for="id_choice">Choice:</label>
             <select name="choice" id="id_choice">
-            <option value="1">ChoiceOption 1</option>
-            <option value="2" selected>ChoiceOption 2</option>
-            <option value="3">ChoiceOption 3</option>
+            <option value="{obj1.pk}">{obj1}</option>
+            <option value="{obj2.pk}" selected>{obj2}</option>
+            <option value="{obj3.pk}">{obj3}</option>
             </select>
-            <input type="hidden" name="initial-choice" value="2" id="initial-id_choice">
+            <input type="hidden" name="initial-choice" value="{obj2.pk}"
+                id="initial-id_choice">
             </p>
             <p><label for="id_choice_int">Choice int:</label>
             <select name="choice_int" id="id_choice_int">
-            <option value="1">ChoiceOption 1</option>
-            <option value="2" selected>ChoiceOption 2</option>
-            <option value="3">ChoiceOption 3</option>
+            <option value="{obj1.pk}">{obj1}</option>
+            <option value="{obj2.pk}" selected>{obj2}</option>
+            <option value="{obj3.pk}">{obj3}</option>
             </select>
-            <input type="hidden" name="initial-choice_int" value="2"
+            <input type="hidden" name="initial-choice_int" value="{obj2.pk}"
                 id="initial-id_choice_int">
             </p>
             <p><label for="id_multi_choice">Multi choice:</label>
             <select multiple name="multi_choice" id="id_multi_choice" required>
-            <option value="1">ChoiceOption 1</option>
-            <option value="2" selected>ChoiceOption 2</option>
-            <option value="3" selected>ChoiceOption 3</option>
+            <option value="{obj1.pk}">{obj1}</option>
+            <option value="{obj2.pk}" selected>{obj2}</option>
+            <option value="{obj3.pk}" selected>{obj3}</option>
             </select>
-            <input type="hidden" name="initial-multi_choice" value="2"
+            <input type="hidden" name="initial-multi_choice" value="{obj2.pk}"
                 id="initial-id_multi_choice_0">
-            <input type="hidden" name="initial-multi_choice" value="3"
+            <input type="hidden" name="initial-multi_choice" value="{obj3.pk}"
                 id="initial-id_multi_choice_1">
             </p>
             <p><label for="id_multi_choice_int">Multi choice int:</label>
             <select multiple name="multi_choice_int" id="id_multi_choice_int" required>
-            <option value="1">ChoiceOption 1</option>
-            <option value="2" selected>ChoiceOption 2</option>
-            <option value="3" selected>ChoiceOption 3</option>
+            <option value="{obj1.pk}">{obj1}</option>
+            <option value="{obj2.pk}" selected>{obj2}</option>
+            <option value="{obj3.pk}" selected>{obj3}</option>
             </select>
-            <input type="hidden" name="initial-multi_choice_int" value="2"
+            <input type="hidden" name="initial-multi_choice_int" value="{obj2.pk}"
                 id="initial-id_multi_choice_int_0">
-            <input type="hidden" name="initial-multi_choice_int" value="3"
+            <input type="hidden" name="initial-multi_choice_int" value="{obj3.pk}"
                 id="initial-id_multi_choice_int_1">
             </p>
             """,
@@ -247,9 +250,10 @@ class ModelFormCallableModelDefault(TestCase):
 
 class FormsModelTestCase(TestCase):
     def test_unicode_filename(self):
-        # FileModel with Unicode filename and data #########################
+        # FileModel with Unicode filename and data.
         file1 = SimpleUploadedFile(
-            "我隻氣墊船裝滿晒鱔.txt", "मेरी मँडराने वाली नाव सर्पमीनों से भरी ह".encode()
+            "我隻氣墊船裝滿晒鱔.txt",
+            "मेरी मँडराने वाली नाव सर्पमीनों से भरी ह".encode(),
         )
         f = FileForm(data={}, files={"file1": file1}, auto_id=False)
         self.assertTrue(f.is_valid())
@@ -263,7 +267,7 @@ class FormsModelTestCase(TestCase):
         m.delete()
 
     def test_boundary_conditions(self):
-        # Boundary conditions on a PositiveIntegerField #########################
+        # Boundary conditions on a PositiveIntegerField.
         class BoundaryForm(ModelForm):
             class Meta:
                 model = BoundaryModel
@@ -293,8 +297,8 @@ class FormsModelTestCase(TestCase):
         r2 = DefaultsForm()["callable_default"].as_widget()
         self.assertNotEqual(r1, r2)
 
-        # In a ModelForm that is passed an instance, the initial values come from the
-        # instance's values, not the model's defaults.
+        # In a ModelForm that is passed an instance, the initial values come
+        # from the instance's values, not the model's defaults.
         foo_instance = Defaults(
             name="instance value", def_date=datetime.date(1969, 4, 4), value=12
         )
@@ -370,10 +374,11 @@ class RelatedModelFormTests(SimpleTestCase):
 
 class ManyToManyExclusionTestCase(TestCase):
     def test_m2m_field_exclusion(self):
-        # Issue 12337. save_instance should honor the passed-in exclude keyword.
-        opt1 = ChoiceOptionModel.objects.create(id=1, name="default")
-        opt2 = ChoiceOptionModel.objects.create(id=2, name="option 2")
-        opt3 = ChoiceOptionModel.objects.create(id=3, name="option 3")
+        # Issue 12337. save_instance should honor the passed-in exclude
+        # keyword.
+        opt1 = ChoiceOptionModel.objects.create(name="default")
+        opt2 = ChoiceOptionModel.objects.create(name="option 2")
+        opt3 = ChoiceOptionModel.objects.create(name="option 3")
         initial = {
             "choice": opt1,
             "choice_int": opt1,

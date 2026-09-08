@@ -1,5 +1,5 @@
 from django.db import models
-from django.db.models.functions import Coalesce, Lower
+from django.db.models.functions import Coalesce, Lower, Now
 
 
 class Product(models.Model):
@@ -73,6 +73,7 @@ class UniqueConstraintProduct(models.Model):
     name = models.CharField(max_length=255)
     color = models.CharField(max_length=32, null=True)
     age = models.IntegerField(null=True)
+    updated = models.DateTimeField(null=True)
 
     class Meta:
         constraints = [
@@ -174,3 +175,11 @@ class ModelWithDatabaseDefault(models.Model):
     field_with_db_default = models.CharField(
         max_length=255, db_default=models.Value("field_with_db_default")
     )
+
+
+class ModelWithDatabaseDefaultExpression(models.Model):
+    field = models.CharField(max_length=255)
+    field_with_db_default_expression = models.DateTimeField(db_default=Now())
+
+    class Meta:
+        required_db_features = {"supports_expression_defaults"}

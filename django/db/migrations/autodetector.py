@@ -3,7 +3,6 @@ import re
 from collections import defaultdict, namedtuple
 from enum import Enum
 from graphlib import TopologicalSorter
-from itertools import chain
 
 from django.conf import settings
 from django.db import models
@@ -29,6 +28,7 @@ class OperationDependency(
         ALTER = 2
         REMOVE_ORDER_WRT = 3
         ALTER_FOO_TOGETHER = 4
+        REMOVE_INDEX_OR_CONSTRAINT = 5
 
     @cached_property
     def model_name_lower(self):
@@ -91,8 +91,9 @@ class MigrationAutodetector:
         elif isinstance(obj, COMPILED_REGEX_TYPE):
             return RegexObject(obj)
         elif isinstance(obj, type):
-            # If this is a type that implements 'deconstruct' as an instance method,
-            # avoid treating this as being deconstructible itself - see #22951
+            # If this is a type that implements 'deconstruct' as an instance
+            # method, avoid treating this as being deconstructible itself - see
+            # #22951
             return obj
         elif hasattr(obj, "deconstruct"):
             deconstructed = obj.deconstruct()
@@ -150,23 +151,17 @@ class MigrationAutodetector:
         # proxy models and ignoring unmigrated apps.
         self.old_model_keys = set()
         self.old_proxy_keys = set()
-        self.old_unmanaged_keys = set()
         self.new_model_keys = set()
         self.new_proxy_keys = set()
-        self.new_unmanaged_keys = set()
         for (app_label, model_name), model_state in self.from_state.models.items():
-            if not model_state.options.get("managed", True):
-                self.old_unmanaged_keys.add((app_label, model_name))
-            elif app_label not in self.from_state.real_apps:
+            if app_label not in self.from_state.real_apps:
                 if model_state.options.get("proxy"):
                     self.old_proxy_keys.add((app_label, model_name))
                 else:
                     self.old_model_keys.add((app_label, model_name))
 
         for (app_label, model_name), model_state in self.to_state.models.items():
-            if not model_state.options.get("managed", True):
-                self.new_unmanaged_keys.add((app_label, model_name))
-            elif app_label not in self.from_state.real_apps or (
+            if app_label not in self.from_state.real_apps or (
                 convert_apps and app_label in convert_apps
             ):
                 if model_state.options.get("proxy"):
@@ -195,8 +190,8 @@ class MigrationAutodetector:
 
         # Create the renamed fields and store them in self.renamed_fields.
         # They are used by create_altered_indexes(), generate_altered_fields(),
-        # generate_removed_altered_index/unique_together(), and
-        # generate_altered_index/unique_together().
+        # generate_removed_altered_unique_together(), and
+        # generate_altered_unique_together().
         self.create_renamed_fields()
         # Create the altered indexes and store them in self.altered_indexes.
         # This avoids the same computation in generate_removed_indexes()
@@ -236,7 +231,6 @@ class MigrationAutodetector:
         """
         self.kept_model_keys = self.old_model_keys & self.new_model_keys
         self.kept_proxy_keys = self.old_proxy_keys & self.new_proxy_keys
-        self.kept_unmanaged_keys = self.old_unmanaged_keys & self.new_unmanaged_keys
         self.through_users = {}
         self.old_field_keys = {
             (app_label, model_name, field_name)
@@ -528,6 +522,18 @@ class MigrationAutodetector:
                 )
                 and operation.name_lower == dependency.model_name_lower
             )
+        # Field is removed and part of an index/constraint.
+        elif (
+            dependency.field_name is not None
+            and dependency.type == OperationDependency.Type.REMOVE_INDEX_OR_CONSTRAINT
+        ):
+            return (
+                isinstance(
+                    operation,
+                    (operations.RemoveIndex, operations.RemoveConstraint),
+                )
+                and operation.model_name_lower == dependency.model_name_lower
+            )
         # Unknown dependency. Raise an error.
         else:
             raise ValueError("Can't handle dependency %r" % (dependency,))
@@ -634,20 +640,17 @@ class MigrationAutodetector:
 
     def generate_created_models(self):
         """
-        Find all new models (both managed and unmanaged) and make create
-        operations for them as well as separate operations to create any
-        foreign key or M2M relationships (these are optimized later, if
-        possible).
+        Find all new models and make create operations for them as well as
+        separate operations to create any foreign key or M2M relationships
+        (these are optimized later, if possible).
 
         Defer any model options that refer to collections of fields that might
         be deferred (e.g. unique_together).
         """
-        old_keys = self.old_model_keys | self.old_unmanaged_keys
+        old_keys = self.old_model_keys
         added_models = self.new_model_keys - old_keys
-        added_unmanaged_models = self.new_unmanaged_keys - old_keys
-        all_added_models = chain(
-            sorted(added_models, key=self.swappable_first_key, reverse=True),
-            sorted(added_unmanaged_models, key=self.swappable_first_key, reverse=True),
+        all_added_models = sorted(
+            added_models, key=self.swappable_first_key, reverse=True
         )
         for app_label, model_name in all_added_models:
             model_state = self.to_state.models[app_label, model_name]
@@ -740,10 +743,6 @@ class MigrationAutodetector:
                 dependencies=dependencies,
                 beginning=True,
             )
-
-            # Don't add operations which modify the database for unmanaged models
-            if not model_state.options.get("managed", True):
-                continue
 
             # Generate operations for each related field
             for name, field in sorted(related_fields.items()):
@@ -891,26 +890,23 @@ class MigrationAutodetector:
                     bases=model_state.bases,
                     managers=model_state.managers,
                 ),
-                # Depend on the deletion of any possible non-proxy version of us
+                # Depend on the deletion of any possible non-proxy version of
+                # us
                 dependencies=dependencies,
             )
 
     def generate_deleted_models(self):
         """
-        Find all deleted models (managed and unmanaged) and make delete
-        operations for them as well as separate operations to delete any
-        foreign key or M2M relationships (these are optimized later, if
-        possible).
+        Find all deleted models and make delete operations for them as well
+        as separate operations to delete any foreign key or M2M relationships
+        (these are optimized later, if possible).
 
         Also bring forward removal of any model options that refer to
         collections of fields - the inverse of generate_created_models().
         """
-        new_keys = self.new_model_keys | self.new_unmanaged_keys
+        new_keys = self.new_model_keys
         deleted_models = self.old_model_keys - new_keys
-        deleted_unmanaged_models = self.old_unmanaged_keys - new_keys
-        all_deleted_models = chain(
-            sorted(deleted_models), sorted(deleted_unmanaged_models)
-        )
+        all_deleted_models = sorted(deleted_models)
         for app_label, model_name in all_deleted_models:
             model_state = self.from_state.models[app_label, model_name]
             # Gather related fields
@@ -931,6 +927,24 @@ class MigrationAutodetector:
                         unique_together=None,
                     ),
                 )
+            if indexes := model_state.options.pop("indexes", None):
+                for index in indexes:
+                    self.add_operation(
+                        app_label,
+                        operations.RemoveIndex(
+                            model_name=model_name,
+                            name=index.name,
+                        ),
+                    )
+            if constraints := model_state.options.pop("constraints", None):
+                for constraint in constraints:
+                    self.add_operation(
+                        app_label,
+                        operations.RemoveConstraint(
+                            model_name=model_name,
+                            name=constraint.name,
+                        ),
+                    )
             # Then remove each related field
             for name in sorted(related_fields):
                 self.add_operation(
@@ -939,10 +953,18 @@ class MigrationAutodetector:
                         model_name=model_name,
                         name=name,
                     ),
+                    dependencies=[
+                        OperationDependency(
+                            app_label,
+                            model_name,
+                            name,
+                            OperationDependency.Type.REMOVE_INDEX_OR_CONSTRAINT,
+                        ),
+                    ],
                 )
             # Finally, remove the model.
-            # This depends on both the removal/alteration of all incoming fields
-            # and the removal of all its own related fields, and if it's
+            # This depends on both the removal/alteration of all incoming
+            # fields and the removal of all its own related fields, and if it's
             # a through model the field that references it.
             dependencies = []
             relations = self.from_state.relations
@@ -1132,13 +1154,19 @@ class MigrationAutodetector:
         # You can't just add NOT NULL fields with no default or fields
         # which don't allow empty strings as default.
         time_fields = (models.DateField, models.DateTimeField, models.TimeField)
+        auto_fields = (models.AutoField, models.SmallAutoField, models.BigAutoField)
+        is_managed = self.to_state.models[app_label, model_name].options.get(
+            "managed", True
+        )
         preserve_default = (
             field.null
             or field.has_default()
-            or field.db_default is not models.NOT_PROVIDED
+            or field.has_db_default()
             or field.many_to_many
             or (field.blank and field.empty_strings_allowed)
             or (isinstance(field, time_fields) and field.auto_now)
+            or (isinstance(field, auto_fields))
+            or not is_managed
         )
         if not preserve_default:
             field = field.clone()
@@ -1152,8 +1180,9 @@ class MigrationAutodetector:
                 )
         if (
             field.unique
-            and field.default is not models.NOT_PROVIDED
+            and field.has_default()
             and callable(field.default)
+            and is_managed
         ):
             self.questioner.ask_unique_callable_default_addition(field_name, model_name)
         self.add_operation(
@@ -1181,9 +1210,9 @@ class MigrationAutodetector:
                 model_name=model_name,
                 name=field_name,
             ),
-            # We might need to depend on the removal of an
-            # order_with_respect_to or index/unique_together operation;
-            # this is safely ignored if there isn't one
+            # Include dependencies such as order_with_respect_to, constraints,
+            # and any generated fields that may depend on this field. These
+            # are safely ignored if not present.
             dependencies=[
                 OperationDependency(
                     app_label,
@@ -1196,6 +1225,15 @@ class MigrationAutodetector:
                     model_name,
                     field_name,
                     OperationDependency.Type.ALTER_FOO_TOGETHER,
+                ),
+                OperationDependency(
+                    app_label,
+                    model_name,
+                    field_name,
+                    OperationDependency.Type.REMOVE_INDEX_OR_CONSTRAINT,
+                ),
+                *self._get_generated_field_dependencies_for_removed_field(
+                    app_label, model_name, field_name
                 ),
             ],
         )
@@ -1222,8 +1260,8 @@ class MigrationAutodetector:
                 field_name
             )
             dependencies = []
-            # Implement any model renames on relations; these are handled by RenameModel
-            # so we need to exclude them from the comparison
+            # Implement any model renames on relations; these are handled by
+            # RenameModel so we need to exclude them from the comparison
             if hasattr(new_field, "remote_field") and getattr(
                 new_field.remote_field, "model", None
             ):
@@ -1235,7 +1273,7 @@ class MigrationAutodetector:
                 # Handle ForeignKey which can only have a single to_field.
                 remote_field_name = getattr(new_field.remote_field, "field_name", None)
                 if remote_field_name:
-                    to_field_rename_key = rename_key + (remote_field_name,)
+                    to_field_rename_key = (*rename_key, remote_field_name)
                     if to_field_rename_key in self.renamed_fields:
                         # Repoint both model and field name because to_field
                         # inclusion in ForeignKey.deconstruct() is based on
@@ -1244,21 +1282,22 @@ class MigrationAutodetector:
                         new_field.remote_field.field_name = (
                             old_field.remote_field.field_name
                         )
-                # Handle ForeignObjects which can have multiple from_fields/to_fields.
+                # Handle ForeignObjects which can have multiple
+                # from_fields/to_fields.
                 from_fields = getattr(new_field, "from_fields", None)
                 if from_fields:
                     from_rename_key = (app_label, model_name)
                     new_field.from_fields = tuple(
                         [
                             self.renamed_fields.get(
-                                from_rename_key + (from_field,), from_field
+                                (*from_rename_key, from_field), from_field
                             )
                             for from_field in from_fields
                         ]
                     )
                     new_field.to_fields = tuple(
                         [
-                            self.renamed_fields.get(rename_key + (to_field,), to_field)
+                            self.renamed_fields.get((*rename_key, to_field), to_field)
                             for to_field in new_field.to_fields
                         ]
                     )
@@ -1289,15 +1328,22 @@ class MigrationAutodetector:
             if old_field_dec != new_field_dec and old_field_name == field_name:
                 both_m2m = old_field.many_to_many and new_field.many_to_many
                 neither_m2m = not old_field.many_to_many and not new_field.many_to_many
-                if both_m2m or neither_m2m:
+                target_changed = (
+                    both_m2m and new_field_dec[2]["to"] != old_field_dec[2]["to"]
+                )
+                is_managed = self.to_state.models[app_label, model_name].options.get(
+                    "managed", True
+                )
+                if (both_m2m or neither_m2m) and not target_changed:
                     # Either both fields are m2m or neither is
                     preserve_default = True
                     if (
                         old_field.null
                         and not new_field.null
                         and not new_field.has_default()
-                        and new_field.db_default is models.NOT_PROVIDED
+                        and not new_field.has_db_default()
                         and not new_field.many_to_many
+                        and is_managed
                     ):
                         field = new_field.clone()
                         new_default = self.questioner.ask_not_null_alteration(
@@ -1462,6 +1508,29 @@ class MigrationAutodetector:
         for attr in new_constraint.non_db_attrs:
             new_kwargs.pop(attr, None)
 
+        # Replace renamed fields if the db_column is preserved.
+        for (
+            _,
+            _,
+            rem_db_column,
+            rem_field_name,
+            _,
+            _,
+            field,
+            field_name,
+        ) in self.renamed_operations:
+            if field.db_column and rem_db_column == field.db_column:
+                new_fields = new_kwargs["fields"]
+                try:
+                    new_field_idx = new_fields.index(field_name)
+                except ValueError:
+                    continue
+                new_kwargs["fields"] = tuple(
+                    new_fields[:new_field_idx]
+                    + (rem_field_name,)
+                    + new_fields[new_field_idx + 1 :]
+                )
+
         return (old_path, old_args, old_kwargs) != (new_path, new_args, new_kwargs)
 
     def create_altered_constraints(self):
@@ -1609,7 +1678,10 @@ class MigrationAutodetector:
 
     def _get_dependencies_for_generated_field(self, field):
         dependencies = []
-        referenced_base_fields = models.Q(field.expression).referenced_base_fields
+        referenced_base_fields = [
+            name
+            for name, *lookups in models.Model._get_expr_references(field.expression)
+        ]
         newly_added_fields = sorted(self.new_field_keys - self.old_field_keys)
         for app_label, model_name, added_field_name in newly_added_fields:
             added_field = self.to_state.models[app_label, model_name].get_field(
@@ -1624,6 +1696,27 @@ class MigrationAutodetector:
                         model_name,
                         added_field.name,
                         OperationDependency.Type.CREATE,
+                    )
+                )
+        return dependencies
+
+    def _get_generated_field_dependencies_for_removed_field(
+        self, app_label, model_name, field_name
+    ):
+        dependencies = []
+        model_state = self.from_state.models[app_label, model_name]
+        generated_fields = (f for f in model_state.fields.values() if f.generated)
+        for field in generated_fields:
+            if any(
+                field_name == name
+                for name, *_ in models.Model._get_expr_references(field.expression)
+            ):
+                dependencies.append(
+                    OperationDependency(
+                        app_label,
+                        model_name,
+                        field.name,
+                        OperationDependency.Type.REMOVE,
                     )
                 )
         return dependencies
@@ -1652,7 +1745,8 @@ class MigrationAutodetector:
             old_model_state = self.from_state.models[app_label, old_model_name]
             new_model_state = self.to_state.models[app_label, model_name]
 
-            # We run the old version through the field renames to account for those
+            # We run the old version through the field renames to account for
+            # those
             old_value = old_model_state.options.get(option_name)
             old_value = (
                 {
@@ -1739,9 +1833,7 @@ class MigrationAutodetector:
         self._generate_altered_foo_together(operations.AlterUniqueTogether)
 
     def generate_altered_db_table(self):
-        models_to_check = self.kept_model_keys.union(
-            self.kept_proxy_keys, self.kept_unmanaged_keys
-        )
+        models_to_check = self.kept_model_keys.union(self.kept_proxy_keys)
         for app_label, model_name in sorted(models_to_check):
             old_model_name = self.renamed_models.get(
                 (app_label, model_name), model_name
@@ -1760,9 +1852,7 @@ class MigrationAutodetector:
                 )
 
     def generate_altered_db_table_comment(self):
-        models_to_check = self.kept_model_keys.union(
-            self.kept_proxy_keys, self.kept_unmanaged_keys
-        )
+        models_to_check = self.kept_model_keys.union(self.kept_proxy_keys)
         for app_label, model_name in sorted(models_to_check):
             old_model_name = self.renamed_models.get(
                 (app_label, model_name), model_name
@@ -1789,11 +1879,6 @@ class MigrationAutodetector:
         """
         models_to_check = self.kept_model_keys.union(
             self.kept_proxy_keys,
-            self.kept_unmanaged_keys,
-            # unmanaged converted to managed
-            self.old_unmanaged_keys & self.new_model_keys,
-            # managed converted to unmanaged
-            self.old_model_keys & self.new_unmanaged_keys,
         )
 
         for app_label, model_name in sorted(models_to_check):

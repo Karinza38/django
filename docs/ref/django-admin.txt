@@ -54,8 +54,8 @@ command and a list of its available options.
 App names
 ---------
 
-Many commands take a list of "app names." An "app name" is the basename of
-the package containing your models. For example, if your :setting:`INSTALLED_APPS`
+Many commands take a list of "app names." An "app name" is the basename of the
+package containing your models. For example, if your :setting:`INSTALLED_APPS`
 contains the string ``'mysite.blog'``, the app name is ``blog``.
 
 Determining the version
@@ -83,6 +83,16 @@ notification and debug information that ``django-admin`` prints to the console.
 
 Available commands
 ==================
+
+.. admonition:: There are community-maintained solutions!
+
+    Django has a vibrant ecosystem. There are developer tool packages
+    highlighted on the `Community Ecosystem`_ page. The Django Packages
+    `Developer Tools grid`_ has even more options for you!
+
+.. _Community Ecosystem: https://www.djangoproject.com/community/ecosystem/#debugging-development-tools
+.. _Developer Tools grid: https://djangopackages.org/grids/g/developer-tools/
+
 
 ``check``
 ---------
@@ -126,13 +136,14 @@ Lists all available tags.
 
 .. django-admin-option:: --deploy
 
-Activates some additional checks that are only relevant in a deployment setting.
+Activates some additional checks that are only relevant in a deployment
+setting.
 
 You can use this option in your local development environment, but since your
-local development settings module may not have many of your production settings,
-you will probably want to point the ``check`` command at a different settings
-module, either by setting the :envvar:`DJANGO_SETTINGS_MODULE` environment
-variable, or by passing the ``--settings`` option:
+local development settings module may not have many of your production
+settings, you will probably want to point the ``check`` command at a different
+settings module, either by setting the :envvar:`DJANGO_SETTINGS_MODULE`
+environment variable, or by passing the ``--settings`` option:
 
 .. console::
 
@@ -192,7 +203,7 @@ Example usage:
 
 .. console::
 
-    django-admin compilemessages --ignore=cache --ignore=outdated/*/locale
+    django-admin compilemessages --ignore=node_modules --ignore=outdated/*/locale
 
 ``createcachetable``
 --------------------
@@ -317,8 +328,8 @@ When result of ``dumpdata`` is saved as a file, it can serve as a
 
 Note that ``dumpdata`` uses the default manager on the model for selecting the
 records to dump. If you're using a :ref:`custom manager <custom-managers>` as
-the default manager and it filters some of the available records, not all of the
-objects will be dumped.
+the default manager and it filters some of the available records, not all of
+the objects will be dumped.
 
 .. django-admin-option:: --all, -a
 
@@ -430,8 +441,8 @@ The script will inspect the database and create a model for each table within
 it.
 
 As you might expect, the created models will have an attribute for every field
-in the table. Note that ``inspectdb`` has a few special cases in its field-name
-output:
+in the table. Note that ``inspectdb`` has a few special cases and limitations
+in its output:
 
 * If ``inspectdb`` cannot map a column's type to a model field type, it'll
   use ``TextField`` and will insert the Python comment
@@ -449,22 +460,28 @@ output:
   ``'Field renamed because it was a Python reserved word.'`` next to the
   field.
 
-This feature is meant as a shortcut, not as definitive model generation. After
-you run it, you'll want to look over the generated models yourself to make
-customizations. In particular, you'll need to rearrange models' order, so that
-models that refer to other models are ordered properly.
+* Database defaults are not introspected and will be absent from the generated
+  output.
 
-Django doesn't create database defaults when a
-:attr:`~django.db.models.Field.default` is specified on a model field.
-Similarly, database defaults aren't translated to model field defaults or
-detected in any fashion by ``inspectdb``.
+* Generated fields are mapped to their output field type.
 
-By default, ``inspectdb`` creates unmanaged models. That is, ``managed = False``
-in the model's ``Meta`` class tells Django not to manage each table's creation,
-modification, and deletion. If you do want to allow Django to manage the
-table's lifecycle, you'll need to change the
-:attr:`~django.db.models.Options.managed` option to ``True`` (or remove
-it because ``True`` is its default value).
+* Models that reference each other may not be in the correct order.
+
+* If models were managed by Django's migration framework, Python-level field
+  options that have no database-level representation will not be included. In
+  particular, ``Field.default`` will not be included, and Python variants
+  for ``on_delete`` are always emitted as ``DO_NOTHING``.
+
+As such, after you run it, you'll want to look over the generated models
+yourself to make customizations. This feature is meant as a shortcut, not as
+definitive model generation.
+
+By default, ``inspectdb`` creates unmanaged models. That is, ``managed =
+False`` in the model's ``Meta`` class tells Django not to manage each table's
+creation, modification, and deletion. If you do want to allow Django to manage
+the table's lifecycle, you'll need to change the
+:attr:`~django.db.models.Options.managed` option to ``True`` (or remove it
+because ``True`` is its default value).
 
 Database-specific notes
 ~~~~~~~~~~~~~~~~~~~~~~~
@@ -497,6 +514,31 @@ Only support for PostgreSQL is implemented.
 .. django-admin-option:: --include-views
 
 If this option is provided, models are also created for database views.
+
+``listurls``
+------------
+
+.. django-admin:: listurls
+
+.. versionadded:: 6.2
+
+List URL patterns from the project's root :doc:`URLconf </topics/http/urls>`
+with optional filtering by prefixes, inspired by ``show_urls`` from
+``django-extensions``.
+
+.. django-admin-option:: --unsorted, -u
+
+Lists URLs in the original ordering from ``urlpatterns``. The default ordering
+is alphabetical by route.
+
+.. django-admin-option:: --prefix, -p [prefix ...]
+
+Filters URLs by given prefixes.
+
+.. django-admin-option:: --format, -f {tabular,stacked,json}
+
+Specifies the output format. Available values are ``tabular``, ``stacked``, and
+``json``. Default is ``tabular``.
 
 ``loaddata``
 ------------
@@ -860,8 +902,8 @@ optimized.
 .. django-admin:: runserver [addrport]
 
 Starts a lightweight development web server on the local machine. By default,
-the server runs on port 8000 on the IP address ``127.0.0.1``. You can pass in an
-IP address and port number explicitly.
+the server runs on port 8000 on the IP address ``127.0.0.1``. You can pass in
+an IP address and port number explicitly.
 
 If you run this script as a user with normal privileges (recommended), you
 might not have access to start a port on a low port number. Low port numbers
@@ -947,9 +989,7 @@ multithreaded by default.
 Uses IPv6 for the development server. This changes the default IP address from
 ``127.0.0.1`` to ``::1``.
 
-.. envvar:: HIDE_PRODUCTION_WARNING
-
-.. versionadded:: 5.2
+.. envvar:: DJANGO_RUNSERVER_HIDE_WARNING
 
 By default, a warning is printed to the console that ``runserver`` is not
 suitable for production:
@@ -1045,18 +1085,25 @@ recipient(s) specified. For example:
 
     django-admin sendtestemail foo@example.com bar@example.com
 
-There are a couple of options, and you may use any combination of them
-together:
+The following options may be used in any combination with each other and with
+recipient email arguments.
+
+.. django-admin-option:: --using ALIAS
+
+.. versionadded:: 6.1
+
+Specifies the :setting:`MAILERS` alias to use for sending the test email to
+the recipients given as arguments. Defaults to the ``"default"`` mailer.
 
 .. django-admin-option:: --managers
 
 Mails the email addresses specified in :setting:`MANAGERS` using
-:meth:`~django.core.mail.mail_managers()`.
+:func:`~django.core.mail.mail_managers`.
 
 .. django-admin-option:: --admins
 
 Mails the email addresses specified in :setting:`ADMINS` using
-:meth:`~django.core.mail.mail_admins()`.
+:func:`~django.core.mail.mail_admins`.
 
 ``shell``
 ---------
@@ -1064,6 +1111,21 @@ Mails the email addresses specified in :setting:`ADMINS` using
 .. django-admin:: shell
 
 Starts the Python interactive interpreter.
+
+All models from installed apps are automatically imported into the shell
+environment. Models from apps listed earlier in :setting:`INSTALLED_APPS` take
+precedence. The following common utilities are also imported::
+
+    from django.db import connection, reset_queries, models
+    from django.conf import settings
+    from django.utils import timezone
+
+For a ``--verbosity`` of 2 or higher, the automatically imported objects will
+be listed. To disable automatic importing entirely, use the ``--no-imports``
+flag.
+
+See the guide on :ref:`customizing this behavior
+<customizing-shell-auto-imports>` to add or remove automatic imports.
 
 .. django-admin-option:: --interface {ipython,bpython,python}, -i {ipython,bpython,python}
 
@@ -1097,6 +1159,10 @@ Python interpreter, use ``python`` as the interface name, like so:
 Disables reading the startup script for the "plain" Python interpreter. By
 default, the script pointed to by the :envvar:`PYTHONSTARTUP` environment
 variable or the ``~/.pythonrc.py`` script is read.
+
+.. django-admin-option:: --no-imports
+
+Disables the automatic import of models from :setting:`INSTALLED_APPS`.
 
 .. django-admin-option:: --command COMMAND, -c COMMAND
 
@@ -1204,10 +1270,10 @@ Specifies the database for which to print the SQL. Defaults to ``default``.
 
 .. django-admin:: squashmigrations app_label [start_migration_name] migration_name
 
-Squashes the migrations for ``app_label`` up to and including ``migration_name``
-down into fewer migrations, if possible. The resulting squashed migrations
-can live alongside the unsquashed ones safely. For more information,
-please read :ref:`migration-squashing`.
+Squashes the migrations for ``app_label`` up to and including
+``migration_name`` down into fewer migrations, if possible. The resulting
+squashed migrations can live alongside the unsquashed ones safely. For more
+information, please read :ref:`migration-squashing`.
 
 When ``start_migration_name`` is given, Django will only include migrations
 starting from and including this migration. This helps to mitigate the
@@ -1247,9 +1313,9 @@ By default, :source:`the new directory <django/conf/app_template>` contains a
 ``models.py`` file and other app template files. If only the app name is given,
 the app directory will be created in the current working directory.
 
-If the optional destination is provided, Django will use that existing
-directory rather than creating a new one. You can use '.' to denote the current
-working directory.
+If the optional destination is provided, Django will use that name instead. If
+the directory with the given name doesn't exist, it will be created. You can
+use '.' to denote the current working directory.
 
 For example:
 
@@ -1284,6 +1350,15 @@ zip files, you can use a URL like:
 
     django-admin startapp --template=https://github.com/githubuser/django-app-template/archive/main.zip myapp
 
+.. warning::
+
+    Templates provided via ``--template`` are used as is. Malicious or poorly
+    constructed templates may introduce security weaknesses or unintended
+    behavior. Compressed archives may also consume excessive resources during
+    extraction, potentially causing crashes or hangs.
+
+    Contents of templates should be carefully inspected before use.
+
 .. django-admin-option:: --extension EXTENSIONS, -e EXTENSIONS
 
 Specifies which file extensions in the app template should be rendered with the
@@ -1301,8 +1376,8 @@ Specifies which directories in the app template should be excluded, in addition
 to ``.git`` and ``__pycache__``. If this option is not provided, directories
 named ``__pycache__`` or starting with ``.`` will be excluded.
 
-The :class:`template context <django.template.Context>` used for all matching
-files is:
+The template context (see :class:`~django.template.Context`) used for all
+matching files is:
 
 - Any option passed to the ``startapp`` command (among the command's supported
   options)
@@ -1359,9 +1434,10 @@ If only the project name is given, both the project directory and project
 package will be named ``<projectname>`` and the project directory
 will be created in the current working directory.
 
-If the optional destination is provided, Django will use that existing
-directory as the project directory, and create ``manage.py`` and the project
-package within it. Use '.' to denote the current working directory.
+If the optional destination is provided, Django will use that name as the
+project directory, and create ``manage.py`` and the project package within it.
+If the directory with the given name doesn't exist, it will be created. Use '.'
+to denote the current working directory.
 
 For example:
 
@@ -1372,7 +1448,10 @@ For example:
 .. django-admin-option:: --template TEMPLATE
 
 Specifies a directory, file path, or URL of a custom project template. See the
-:option:`startapp --template` documentation for examples and usage.
+:option:`startapp --template` documentation for examples and usage. The same
+**security considerations** described for ``startapp`` templates apply here:
+malicious or poorly constructed templates may introduce weaknesses or consume
+excessive resources, and templates should be carefully inspected before use.
 
 .. django-admin-option:: --extension EXTENSIONS, -e EXTENSIONS
 
@@ -1391,7 +1470,7 @@ Specifies which directories in the project template should be excluded, in
 addition to ``.git`` and ``__pycache__``. If this option is not provided,
 directories named ``__pycache__`` or starting with ``.`` will be excluded.
 
-The :class:`template context <django.template.Context>` used is:
+The template context (see :class:`~django.template.Context`) used is:
 
 - Any option passed to the ``startproject`` command (among the command's
   supported options)
@@ -1485,7 +1564,7 @@ Runs tests in separate parallel processes. Since modern processors have
 multiple cores, this allows running tests significantly faster.
 
 Using ``--parallel`` without a value, or with the value ``auto``, runs one test
-process per core according to :func:`multiprocessing.cpu_count()`. You can
+process per core according to :func:`multiprocessing.cpu_count`. You can
 override this by passing the desired number of processes, e.g.
 ``--parallel 4``, or by setting the :envvar:`DJANGO_TEST_PROCESSES` environment
 variable.
@@ -1558,7 +1637,7 @@ as :option:`unittest's --buffer option<unittest.-b>`.
 
 .. django-admin-option:: --no-faulthandler
 
-Django automatically calls :func:`faulthandler.enable()` when starting the
+Django automatically calls :func:`faulthandler.enable` when starting the
 tests, which allows it to print a traceback if the interpreter crashes. Pass
 ``--no-faulthandler`` to disable this behavior.
 
@@ -1569,10 +1648,6 @@ Outputs timings, including database setup and total run time.
 .. django-admin-option:: --durations N
 
 Shows the N slowest test cases (N=0 for all).
-
-.. admonition:: Python 3.12 and later
-
-    This feature is only available for Python 3.12 and later.
 
 ``testserver``
 --------------
@@ -1598,15 +1673,15 @@ For example, this command:
 
 This is useful in a number of ways:
 
-* When you're writing :doc:`unit tests </topics/testing/overview>` of how your views
-  act with certain fixture data, you can use ``testserver`` to interact with
-  the views in a web browser, manually.
+* When you're writing :doc:`unit tests </topics/testing/overview>` of how your
+  views act with certain fixture data, you can use ``testserver`` to interact
+  with the views in a web browser, manually.
 
 * Let's say you're developing your Django application and have a "pristine"
   copy of a database that you'd like to interact with. You can dump your
   database to a :ref:`fixture <fixtures-explanation>` (using the
   :djadmin:`dumpdata` command, explained above), then use ``testserver`` to run
-  your web application with that data.  With this arrangement, you have the
+  your web application with that data. With this arrangement, you have the
   flexibility of messing up your data in any way, knowing that whatever data
   changes you're making are only being made to a test database.
 
@@ -1723,10 +1798,10 @@ it when running interactively.
 
 Specifies the database into which the superuser object will be saved.
 
-You can subclass the management command and override ``get_input_data()`` if you
-want to customize data input and validation. Consult the source code for
-details on the existing implementation and the method's parameters. For example,
-it could be useful if you have a ``ForeignKey`` in
+You can subclass the management command and override ``get_input_data()`` if
+you want to customize data input and validation. Consult the source code for
+details on the existing implementation and the method's parameters. For
+example, it could be useful if you have a ``ForeignKey`` in
 :attr:`~django.contrib.auth.models.CustomUser.REQUIRED_FIELDS` and want to
 allow creating an instance instead of entering the primary key of an existing
 instance.
@@ -1796,8 +1871,8 @@ Please refer to its :djadmin:`description <collectstatic>` in the
 This command is only available if the :doc:`static files application
 </howto/static-files/index>` (``django.contrib.staticfiles``) is installed.
 
-Please refer to its :djadmin:`description <findstatic>` in the :doc:`staticfiles
-</ref/contrib/staticfiles>` documentation.
+Please refer to its :djadmin:`description <findstatic>` in the
+:doc:`staticfiles </ref/contrib/staticfiles>` documentation.
 
 Default options
 ===============
@@ -1809,7 +1884,7 @@ allows for the following options by default:
 
 .. django-admin-option:: --pythonpath PYTHONPATH
 
-Adds the given filesystem path to the Python :py:data:`sys.path` module
+Adds the given filesystem path to the Python :data:`sys.path` module
 attribute. If this isn't provided, ``django-admin`` will use the
 :envvar:`PYTHONPATH` environment variable.
 
@@ -1872,7 +1947,7 @@ Example usage:
 
 .. django-admin-option:: --no-color
 
-Disables colorized command output.  Some commands format their output to be
+Disables colorized command output. Some commands format their output to be
 colorized. For example, errors will be printed to the console in red and SQL
 statements will be syntax highlighted.
 
@@ -2050,8 +2125,8 @@ Bash completion
 ---------------
 
 If you use the Bash shell, consider installing the Django bash completion
-script, which lives in :source:`extras/django_bash_completion` in the Django source
-distribution. It enables tab-completion of ``django-admin`` and
+script, which lives in :source:`extras/django_bash_completion` in the Django
+source distribution. It enables tab-completion of ``django-admin`` and
 ``manage.py`` commands, so you can, for instance...
 
 * Type ``django-admin``.
@@ -2115,7 +2190,8 @@ Examples::
       management.call_command(loaddata.Command(), "test_data", verbosity=0)
 
 Note that command options that take no arguments are passed as keywords
-with ``True`` or ``False``, as you can see with the ``interactive`` option above.
+with ``True`` or ``False``, as you can see with the ``interactive`` option
+above.
 
 Named arguments can be passed by using either one of the following syntaxes::
 

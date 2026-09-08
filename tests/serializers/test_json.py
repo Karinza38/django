@@ -188,7 +188,8 @@ class JsonSerializerTestCase(SerializersTestBase, TestCase):
     def test_helpful_error_message_for_many2many_natural1(self):
         """
         Invalid many-to-many keys should throw a helpful error message.
-        This tests the code path where one of a list of natural keys is invalid.
+        This tests the code path where one of a list of natural keys is
+        invalid.
         """
         test_string = """[{
             "pk": 1,
@@ -328,3 +329,28 @@ class DjangoJSONEncoderTests(SimpleTestCase):
             json.dumps({"duration": duration}, cls=DjangoJSONEncoder),
             '{"duration": "P0DT00H00M00S"}',
         )
+
+    def test_datetime_and_time_microseconds(self):
+        tests = [
+            (datetime.datetime(2000, 1, 1, 0, 0, 0, 0), '"2000-01-01T00:00:00"'),
+            (datetime.datetime(2000, 1, 1, 0, 0, 0, 1), '"2000-01-01T00:00:00"'),
+            (
+                datetime.datetime(2000, 1, 1, 0, 0, 0, 1000),
+                '"2000-01-01T00:00:00.001"',
+            ),
+            (
+                datetime.datetime(2000, 1, 1, 0, 0, 0, 1001),
+                '"2000-01-01T00:00:00.001"',
+            ),
+            (
+                datetime.datetime(2000, 1, 1, 0, 0, 0, 123000),
+                '"2000-01-01T00:00:00.123"',
+            ),
+            (datetime.time(0, 0, 0, 0), '"00:00:00"'),
+            (datetime.time(0, 0, 0, 1), '"00:00:00"'),
+            (datetime.time(0, 0, 0, 1000), '"00:00:00.001"'),
+            (datetime.time(0, 0, 0, 123000), '"00:00:00.123"'),
+        ]
+        for value, expected in tests:
+            with self.subTest(value=value):
+                self.assertEqual(json.dumps(value, cls=DjangoJSONEncoder), expected)

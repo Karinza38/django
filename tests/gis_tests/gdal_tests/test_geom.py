@@ -13,7 +13,6 @@ from django.contrib.gis.geos import GEOSException
 from django.template import Context
 from django.template.engine import Engine
 from django.test import SimpleTestCase
-from django.utils.deprecation import RemovedInDjango60Warning
 
 from ..test_data import TestDataMixin
 
@@ -522,7 +521,8 @@ class OGRGeomTest(SimpleTestCase, TestDataMixin):
         self.assertEqual(3, geom[0].coord_dim)
         self.assertEqual(wkt_3d, geom.wkt)
 
-    # Testing binary predicates, `assertIs` is used to check that bool is returned.
+    # Testing binary predicates, `assertIs` is used to check that bool is
+    # returned.
 
     def test_equivalence_regression(self):
         "Testing equivalence methods with non-OGRGeometry instances."
@@ -1063,13 +1063,3 @@ class OGRGeomTest(SimpleTestCase, TestDataMixin):
         )
         self.assertIsInstance(geom, CurvePolygon)
         self.assertIsInstance(geom.shell, CircularString)
-
-
-class DeprecationTests(SimpleTestCase):
-    def test_coord_setter_deprecation(self):
-        geom = OGRGeometry("POINT (1 2)")
-        msg = "coord_dim setter is deprecated. Use set_3d() instead."
-        with self.assertWarnsMessage(RemovedInDjango60Warning, msg) as ctx:
-            geom.coord_dim = 3
-        self.assertEqual(geom.coord_dim, 3)
-        self.assertEqual(ctx.filename, __file__)

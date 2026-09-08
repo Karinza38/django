@@ -6,7 +6,7 @@ from .models import DataModel
 
 
 class BinaryFieldTests(TestCase):
-    binary_data = b"\x00\x46\xFE"
+    binary_data = b"\x00\x46\xfe"
 
     def test_set_and_retrieve(self):
         data_set = (
@@ -58,3 +58,12 @@ class BinaryFieldTests(TestCase):
         self.assertSequenceEqual(
             DataModel.objects.filter(data=memoryview(self.binary_data)), [dm]
         )
+
+    def test_invalid_data(self):
+        invalid_values = [" A", "!"]
+        for value in invalid_values:
+            with self.subTest(value=value):
+                with self.assertRaisesMessage(
+                    ValidationError, f"“{value}” is not a valid binary value."
+                ):
+                    DataModel(data=value).full_clean()

@@ -3,8 +3,8 @@ from django.db.migrations import operations
 from django.db.migrations.optimizer import MigrationOptimizer
 from django.db.models.functions import Abs
 
+from .base import OptimizerTestBase
 from .models import EmptyManager, UnicodeModel
-from .test_base import OptimizerTestBase
 
 
 class OptimizerTests(OptimizerTestBase):
@@ -1430,6 +1430,54 @@ class OptimizerTests(OptimizerTestBase):
                         ("weight", models.IntegerField()),
                     ],
                     options={"constraints": [gt_constraint]},
+                ),
+            ],
+        )
+
+    def test_create_model_alter_constraint(self):
+        original_constraint = models.CheckConstraint(
+            condition=models.Q(weight__gt=0), name="pony_weight_gt_0"
+        )
+        altered_constraint = models.CheckConstraint(
+            condition=models.Q(weight__gt=0),
+            name="pony_weight_gt_0",
+            violation_error_message="incorrect weight",
+        )
+        self.assertOptimizesTo(
+            [
+                migrations.CreateModel(
+                    name="Pony",
+                    fields=[
+                        ("weight", models.IntegerField()),
+                    ],
+                    options={
+                        "constraints": [
+                            original_constraint,
+                            models.UniqueConstraint(
+                                "weight", name="pony_weight_unique"
+                            ),
+                        ],
+                    },
+                ),
+                migrations.AlterConstraint(
+                    "Pony", "pony_weight_gt_0", altered_constraint
+                ),
+            ],
+            [
+                migrations.CreateModel(
+                    name="Pony",
+                    fields=[
+                        ("weight", models.IntegerField()),
+                    ],
+                    options={
+                        "constraints": [
+                            models.UniqueConstraint(
+                                "weight",
+                                name="pony_weight_unique",
+                            ),
+                            altered_constraint,
+                        ]
+                    },
                 ),
             ],
         )

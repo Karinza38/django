@@ -1,5 +1,4 @@
-from django.db import NotSupportedError
-from django.db.models import Count, Q
+from django.db.models import Count, Max, Q
 from django.test import TestCase
 
 from .models import Comment, Tenant, User
@@ -82,7 +81,7 @@ class CompositePKAggregateTests(TestCase):
 
     def test_count_distinct_not_supported(self):
         with self.assertRaisesMessage(
-            NotSupportedError, "COUNT(DISTINCT) doesn't support composite primary keys"
+            ValueError, "COUNT(DISTINCT) doesn't support composite primary keys"
         ):
             self.assertIsNone(
                 User.objects.annotate(comments__count=Count("comments", distinct=True))
@@ -137,3 +136,28 @@ class CompositePKAggregateTests(TestCase):
             ),
             (self.user_3, self.user_1, self.user_2),
         )
+
+    def test_max_pk(self):
+        msg = "Max expression does not support composite primary keys."
+        with self.assertRaisesMessage(ValueError, msg):
+            Comment.objects.aggregate(Max("pk"))
+
+    def test_first_from_unordered_queryset_aggregation_pk_selected(self):
+        self.assertEqual(
+            Comment.objects.values("pk").annotate(max=Max("id")).first(),
+            {"pk": (self.comment_1.tenant_id, 1), "max": 1},
+        )
+
+    def test_first_from_unordered_queryset_aggregation_pk_selected_separately(self):
+        self.assertEqual(
+            Comment.objects.values("tenant", "id").annotate(max=Max("id")).first(),
+            {"tenant": self.comment_1.tenant_id, "id": 1, "max": 1},
+        )
+
+    def test_first_from_unordered_queryset_aggregation_pk_incomplete(self):
+        msg = (
+            "Cannot use QuerySet.first() on an unordered queryset performing "
+            "aggregation. Add an ordering with order_by()."
+        )
+        with self.assertRaisesMessage(TypeError, msg):
+            Comment.objects.values("tenant").annotate(max=Max("id")).first()

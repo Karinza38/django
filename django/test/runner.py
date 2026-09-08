@@ -1,6 +1,7 @@
 import argparse
 import ctypes
 import faulthandler
+import functools
 import hashlib
 import io
 import itertools
@@ -11,14 +12,12 @@ import pickle
 import random
 import sys
 import textwrap
+import time
 import unittest
 import unittest.suite
 from collections import defaultdict
 from contextlib import contextmanager
 from importlib import import_module
-from io import StringIO
-
-import sqlparse
 
 import django
 from django.core.management import call_command
@@ -30,7 +29,7 @@ from django.test.utils import setup_test_environment
 from django.test.utils import teardown_databases as _teardown_databases
 from django.test.utils import teardown_test_environment
 from django.utils.datastructures import OrderedSet
-from django.utils.version import PY312
+from django.utils.version import PY313
 
 try:
     import ipdb as pdb
@@ -43,16 +42,47 @@ except ImportError:
     tblib = None
 
 
+class QueryFormatter(logging.Formatter):
+    def format(self, record):
+        if (alias := getattr(record, "alias", None)) in connections:
+            format_sql = connections[alias].ops.format_debug_sql
+
+            sql = None
+            formatted_sql = None
+            if args := record.args:
+                if isinstance(args, tuple) and len(args) > 1 and (sql := args[1]):
+                    record.args = (args[0], formatted_sql := format_sql(sql), *args[2:])
+                elif isinstance(record.args, dict) and (sql := record.args.get("sql")):
+                    record.args["sql"] = formatted_sql = format_sql(sql)
+
+            if extra_sql := getattr(record, "sql", None):
+                if extra_sql == sql:
+                    record.sql = formatted_sql
+                else:
+                    record.sql = format_sql(extra_sql)
+
+        return super().format(record)
+
+
 class DebugSQLTextTestResult(unittest.TextTestResult):
     def __init__(self, stream, descriptions, verbosity):
         self.logger = logging.getLogger("django.db.backends")
         self.logger.setLevel(logging.DEBUG)
-        self.debug_sql_stream = None
+        self.handler = None
         super().__init__(stream, descriptions, verbosity)
 
+    def _read_logger_stream(self):
+        if self.handler is None:
+            # Error before tests e.g. in setUpTestData().
+            sql = ""
+        else:
+            self.handler.stream.seek(0)
+            sql = self.handler.stream.read()
+        return sql
+
     def startTest(self, test):
-        self.debug_sql_stream = StringIO()
-        self.handler = logging.StreamHandler(self.debug_sql_stream)
+        self.handler = logging.StreamHandler(io.StringIO())
+        self.handler.setFormatter(QueryFormatter())
         self.logger.addHandler(self.handler)
         super().startTest(test)
 
@@ -60,35 +90,26 @@ class DebugSQLTextTestResult(unittest.TextTestResult):
         super().stopTest(test)
         self.logger.removeHandler(self.handler)
         if self.showAll:
-            self.debug_sql_stream.seek(0)
-            self.stream.write(self.debug_sql_stream.read())
+            self.stream.write(self._read_logger_stream())
             self.stream.writeln(self.separator2)
 
     def addError(self, test, err):
         super().addError(test, err)
-        if self.debug_sql_stream is None:
-            # Error before tests e.g. in setUpTestData().
-            sql = ""
-        else:
-            self.debug_sql_stream.seek(0)
-            sql = self.debug_sql_stream.read()
-        self.errors[-1] = self.errors[-1] + (sql,)
+        self.errors[-1] = self.errors[-1] + (self._read_logger_stream(),)
 
     def addFailure(self, test, err):
         super().addFailure(test, err)
-        self.debug_sql_stream.seek(0)
-        self.failures[-1] = self.failures[-1] + (self.debug_sql_stream.read(),)
+        self.failures[-1] = self.failures[-1] + (self._read_logger_stream(),)
 
     def addSubTest(self, test, subtest, err):
         super().addSubTest(test, subtest, err)
         if err is not None:
-            self.debug_sql_stream.seek(0)
             errors = (
                 self.failures
                 if issubclass(err[0], test.failureException)
                 else self.errors
             )
-            errors[-1] = errors[-1] + (self.debug_sql_stream.read(),)
+            errors[-1] = errors[-1] + (self._read_logger_stream(),)
 
     def printErrorList(self, flavour, errors):
         for test, err, sql_debug in errors:
@@ -97,9 +118,7 @@ class DebugSQLTextTestResult(unittest.TextTestResult):
             self.stream.writeln(self.separator2)
             self.stream.writeln(err)
             self.stream.writeln(self.separator2)
-            self.stream.writeln(
-                sqlparse.format(sql_debug, reindent=True, keyword_case="upper")
-            )
+            self.stream.writeln(sql_debug)
 
 
 class PDBDebugResult(unittest.TextTestResult):
@@ -126,7 +145,10 @@ class PDBDebugResult(unittest.TextTestResult):
         self.buffer = False
         exc_type, exc_value, traceback = error
         print("\nOpening PDB: %r" % exc_value)
-        pdb.post_mortem(traceback)
+        if PY313:
+            pdb.post_mortem(exc_value)
+        else:
+            pdb.post_mortem(traceback)
 
 
 class DummyList:
@@ -186,8 +208,7 @@ class RemoteTestResult(unittest.TestResult):
         pickle.loads(pickle.dumps(obj))
 
     def _print_unpicklable_subtest(self, test, subtest, pickle_exc):
-        print(
-            """
+        print("""
 Subtest failed:
 
     test: {}
@@ -200,10 +221,7 @@ test runner cannot handle it cleanly. Here is the pickling error:
 
 You should re-run this test with --parallel=1 to reproduce the failure
 with a cleaner failure message.
-""".format(
-                test, subtest, pickle_exc
-            )
-        )
+""".format(test, subtest, pickle_exc))
 
     def check_picklable(self, test, err):
         # Ensure that sys.exc_info() tuples are picklable. This displays a
@@ -224,8 +242,7 @@ with a cleaner failure message.
                 pickle_exc_txt, 75, initial_indent="    ", subsequent_indent="    "
             )
             if tblib is None:
-                print(
-                    """
+                print("""
 
 {} failed:
 
@@ -237,13 +254,9 @@ parallel test runner to handle this exception cleanly.
 In order to see the traceback, you should install tblib:
 
     python -m pip install tblib
-""".format(
-                        test, original_exc_txt
-                    )
-                )
+""".format(test, original_exc_txt))
             else:
-                print(
-                    """
+                print("""
 
 {} failed:
 
@@ -258,10 +271,7 @@ Here's the error encountered while trying to pickle the exception:
 
 You should re-run this test with the --parallel=1 option to reproduce the
 failure and get a correct traceback.
-""".format(
-                        test, original_exc_txt, pickle_exc_txt
-                    )
-                )
+""".format(test, original_exc_txt, pickle_exc_txt))
             raise
 
     def check_subtest_picklable(self, test, subtest):
@@ -384,8 +394,9 @@ def get_max_test_processes():
     The maximum number of test processes when using the --parallel option.
     """
     # The current implementation of the parallel test runner requires
-    # multiprocessing to start subprocesses with fork() or spawn().
-    if multiprocessing.get_start_method() not in {"fork", "spawn"}:
+    # multiprocessing to start subprocesses with fork(), forkserver(), or
+    # spawn().
+    if multiprocessing.get_start_method() not in {"fork", "spawn", "forkserver"}:
         return 1
     try:
         return int(os.environ["DJANGO_TEST_PROCESSES"])
@@ -408,8 +419,59 @@ def parallel_type(value):
 _worker_id = 0
 
 
+def _claim_database_clone_slot(worker_slots, timeout=5):
+    """
+    Claim a database clone slot (1-based index) for this worker process.
+
+    Each slot of the shared worker_slots array stores the pid of the worker
+    process that owns it, or 0 if the slot is free. When multiprocessing.Pool
+    spawns a replacement for an exited worker, the replacement waits for the
+    parent process to release the dead worker's slot instead of being assigned
+    an index that has no matching database clone.
+    """
+    pid = os.getpid()
+    deadline = time.monotonic() + timeout
+    while True:
+        with worker_slots.get_lock():
+            free_index = None
+            for index, owner in enumerate(worker_slots):
+                # Prefer a slot this pid already owns over a free one, so that
+                # a pid reused by the OS for a replacement worker can never
+                # hold two slots at once (which would leave the exited
+                # worker's slot stuck until the replacement finishes).
+                if owner == pid:
+                    return index + 1
+                if owner == 0 and free_index is None:
+                    free_index = index
+            if free_index is not None:
+                worker_slots[free_index] = pid
+                return free_index + 1
+        if time.monotonic() > deadline:
+            raise RuntimeError(
+                f"Test worker (pid {pid}) could not acquire a test database "
+                f"clone within {timeout} seconds because all "
+                f"{len(worker_slots)} clones are assigned to running workers."
+            )
+        time.sleep(0.05)
+
+
+def _release_dead_worker_slots(worker_slots):
+    """
+    Release database clone slots owned by worker processes that exited, so
+    that replacement workers spawned by multiprocessing.Pool can reuse them.
+
+    This runs in the parent process, where pool workers are visible as active
+    children.
+    """
+    with worker_slots.get_lock():
+        alive_pids = {child.pid for child in multiprocessing.active_children()}
+        for index, owner in enumerate(worker_slots):
+            if owner and owner not in alive_pids:
+                worker_slots[index] = 0
+
+
 def _init_worker(
-    counter,
+    worker_slots,
     initial_settings=None,
     serialized_contents=None,
     process_setup=None,
@@ -418,7 +480,7 @@ def _init_worker(
     used_aliases=None,
 ):
     """
-    Switch to databases dedicated to this worker.
+    Switch to databases dedicated to this worker and run system checks.
 
     This helper lives at module-level because of the multiprocessing module's
     requirements.
@@ -426,13 +488,14 @@ def _init_worker(
 
     global _worker_id
 
-    with counter.get_lock():
-        counter.value += 1
-        _worker_id = counter.value
+    _worker_id = _claim_database_clone_slot(worker_slots)
 
-    start_method = multiprocessing.get_start_method()
+    is_spawn_or_forkserver = multiprocessing.get_start_method() in {
+        "forkserver",
+        "spawn",
+    }
 
-    if start_method == "spawn":
+    if is_spawn_or_forkserver:
         if process_setup and callable(process_setup):
             if process_setup_args is None:
                 process_setup_args = ()
@@ -443,12 +506,30 @@ def _init_worker(
     db_aliases = used_aliases if used_aliases is not None else connections
     for alias in db_aliases:
         connection = connections[alias]
-        if start_method == "spawn":
+        if is_spawn_or_forkserver:
             # Restore initial settings in spawned processes.
             connection.settings_dict.update(initial_settings[alias])
             if value := serialized_contents.get(alias):
                 connection._test_serialized_contents = value
         connection.creation.setup_worker_connection(_worker_id)
+        if (
+            is_spawn_or_forkserver
+            and os.environ.get("RUNNING_DJANGOS_TEST_SUITE") == "true"
+        ):
+            connection.creation.mark_expected_failures_and_skips()
+
+    if is_spawn_or_forkserver:
+        call_command(
+            "check", stdout=io.StringIO(), stderr=io.StringIO(), databases=used_aliases
+        )
+
+
+def _safe_init_worker(init_worker, init_failed, *args, **kwargs):
+    try:
+        init_worker(*args, **kwargs)
+    except Exception:
+        init_failed.value = True
+        raise
 
 
 def _run_subsuite(args):
@@ -521,12 +602,22 @@ class ParallelTestSuite(unittest.TestSuite):
         exception classes which cannot be unpickled.
         """
         self.initialize_suite()
-        counter = multiprocessing.Value(ctypes.c_int, 0)
-        pool = multiprocessing.Pool(
+        # One slot per db clone, holding the pid of the worker process (or 0).
+        worker_slots = multiprocessing.Array(ctypes.c_longlong, self.processes)
+        init_failed = multiprocessing.Value(ctypes.c_bool, False)
+        args = [
+            (self.runner_class, index, subsuite, self.failfast, self.buffer)
+            for index, subsuite in enumerate(self.subsuites)
+        ]
+        # Don't buffer in the main process to avoid error propagation issues.
+        result.buffer = False
+
+        with multiprocessing.Pool(
             processes=self.processes,
-            initializer=self.init_worker.__func__,
+            initializer=functools.partial(_safe_init_worker, self.init_worker.__func__),
             initargs=[
-                counter,
+                init_failed,
+                worker_slots,
                 self.initial_settings,
                 self.serialized_contents,
                 self.process_setup.__func__,
@@ -534,31 +625,34 @@ class ParallelTestSuite(unittest.TestSuite):
                 self.debug_mode,
                 self.used_aliases,
             ],
-        )
-        args = [
-            (self.runner_class, index, subsuite, self.failfast, self.buffer)
-            for index, subsuite in enumerate(self.subsuites)
-        ]
-        test_results = pool.imap_unordered(self.run_subsuite.__func__, args)
+        ) as pool:
+            test_results = pool.imap_unordered(self.run_subsuite.__func__, args)
 
-        while True:
-            if result.shouldStop:
-                pool.terminate()
-                break
+            while True:
+                if result.shouldStop:
+                    pool.terminate()
+                    break
 
-            try:
-                subsuite_index, events = test_results.next(timeout=0.1)
-            except multiprocessing.TimeoutError:
-                continue
-            except StopIteration:
-                pool.close()
-                break
+                # Return the database clones of exited workers to the pool of
+                # available slots so that replacement workers can reuse them.
+                _release_dead_worker_slots(worker_slots)
 
-            tests = list(self.subsuites[subsuite_index])
-            for event in events:
-                self.handle_event(result, tests, event)
+                try:
+                    subsuite_index, events = test_results.next(timeout=0.1)
+                except multiprocessing.TimeoutError as err:
+                    if init_failed.value:
+                        err.add_note("ERROR: _init_worker failed, see prior traceback")
+                        raise
+                    continue
+                except StopIteration:
+                    pool.close()
+                    break
 
-        pool.join()
+                tests = list(self.subsuites[subsuite_index])
+                for event in events:
+                    self.handle_event(result, tests, event)
+
+            pool.join()
 
         return result
 
@@ -586,7 +680,7 @@ class ParallelTestSuite(unittest.TestSuite):
         return iter(self.subsuites)
 
     def initialize_suite(self):
-        if multiprocessing.get_start_method() == "spawn":
+        if multiprocessing.get_start_method() in {"forkserver", "spawn"}:
             self.initial_settings = {
                 alias: connections[alias].settings_dict for alias in connections
             }
@@ -830,15 +924,14 @@ class DiscoverRunner:
                 "unittest -k option."
             ),
         )
-        if PY312:
-            parser.add_argument(
-                "--durations",
-                dest="durations",
-                type=int,
-                default=None,
-                metavar="N",
-                help="Show the N slowest test cases (N=0 for all).",
-            )
+        parser.add_argument(
+            "--durations",
+            dest="durations",
+            type=int,
+            default=None,
+            metavar="N",
+            help="Show the N slowest test cases (N=0 for all).",
+        )
 
     @property
     def shuffle_seed(self):
@@ -1006,9 +1099,8 @@ class DiscoverRunner:
             "resultclass": self.get_resultclass(),
             "verbosity": self.verbosity,
             "buffer": self.buffer,
+            "durations": self.durations,
         }
-        if PY312:
-            kwargs["durations"] = self.durations
         return kwargs
 
     def run_checks(self, databases):

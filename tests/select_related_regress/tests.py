@@ -32,12 +32,12 @@ class SelectRelatedRegressTests(TestCase):
         Regression test for bug #7110.
 
         When using select_related(), we must query the
-        Device and Building tables using two different aliases (each) in order to
-        differentiate the start and end Connection fields. The net result is that
-        both the "connections = ..." queries here should give the same results
-        without pulling in more than the absolute minimum number of tables
-        (history has shown that it's easy to make a mistake in the implementation
-        and include some unnecessary bonus joins).
+        Device and Building tables using two different aliases (each) in order
+        to differentiate the start and end Connection fields. The net result is
+        that both the "connections = ..." queries here should give the same
+        results without pulling in more than the absolute minimum number of
+        tables (history has shown that it's easy to make a mistake in the
+        implementation and include some unnecessary bonus joins).
         """
 
         b = Building.objects.create(name="101")
@@ -62,7 +62,7 @@ class SelectRelatedRegressTests(TestCase):
             Connection.objects.filter(
                 start__device__building=b, end__device__building=b
             )
-            .select_related()
+            .select_related("start__device__building", "end__device__building")
             .order_by("id")
         )
         self.assertEqual(
@@ -70,8 +70,9 @@ class SelectRelatedRegressTests(TestCase):
             [(c1.id, "router/4", "switch/7"), (c2.id, "switch/7", "server/1")],
         )
 
-        # This final query should only have seven tables (port, device and building
-        # twice each, plus connection once). Thus, 6 joins plus the FROM table.
+        # This final query should only have seven tables (port, device and
+        # building twice each, plus connection once). Thus, 6 joins plus the
+        # FROM table.
         self.assertEqual(str(connections.query).count(" JOIN "), 6)
 
     def test_regression_8106(self):
@@ -92,7 +93,7 @@ class SelectRelatedRegressTests(TestCase):
         c = Class.objects.create(org=o)
         Enrollment.objects.create(std=s, cls=c)
 
-        e_related = Enrollment.objects.select_related()[0]
+        e_related = Enrollment.objects.select_related("std", "cls")[0]
         self.assertEqual(e_related.std.person.user.name, "std")
         self.assertEqual(e_related.cls.org.person.user.name, "org")
 
@@ -102,8 +103,8 @@ class SelectRelatedRegressTests(TestCase):
 
         the first related model in the tests below
         ("state") is empty and we try to select the more remotely related
-        state__country. The regression here was not skipping the empty column results
-        for country before getting status.
+        state__country. The regression here was not skipping the empty column
+        results for country before getting status.
         """
 
         Country.objects.create(name="Australia")
@@ -111,7 +112,9 @@ class SelectRelatedRegressTests(TestCase):
         client = Client.objects.create(name="client", status=active)
 
         self.assertEqual(client.status, active)
-        self.assertEqual(Client.objects.select_related()[0].status, active)
+        self.assertEqual(
+            Client.objects.select_related("state", "status")[0].status, active
+        )
         self.assertEqual(Client.objects.select_related("state")[0].status, active)
         self.assertEqual(
             Client.objects.select_related("state", "status")[0].status, active
@@ -220,7 +223,7 @@ class SelectRelatedRegressTests(TestCase):
         Chick.objects.create(name="Chick", mother=hen)
 
         self.assertEqual(Chick.objects.all()[0].mother.name, "Hen")
-        self.assertEqual(Chick.objects.select_related()[0].mother.name, "Hen")
+        self.assertEqual(Chick.objects.select_related("mother")[0].mother.name, "Hen")
 
     def test_regression_10733(self):
         a = A.objects.create(name="a", lots_of_text="lots_of_text_a", a_field="a_field")
@@ -236,7 +239,7 @@ class SelectRelatedRegressTests(TestCase):
             "c_b__lots_of_text",
             "c_a__name",
             "c_b__name",
-        ).select_related()
+        ).select_related("c_a", "c_b")
         self.assertSequenceEqual(results, [c])
         with self.assertNumQueries(0):
             qs_c = results[0]

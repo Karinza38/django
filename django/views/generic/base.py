@@ -1,6 +1,6 @@
 import logging
-
-from asgiref.sync import iscoroutinefunction, markcoroutinefunction
+from inspect import iscoroutinefunction, markcoroutinefunction
+from urllib.parse import urlparse
 
 from django.core.exceptions import ImproperlyConfigured
 from django.http import (
@@ -14,6 +14,7 @@ from django.template.response import TemplateResponse
 from django.urls import reverse
 from django.utils.decorators import classonlymethod
 from django.utils.functional import classproperty
+from django.utils.log import log_response
 
 logger = logging.getLogger("django.request")
 
@@ -134,22 +135,22 @@ class View:
         # Try to dispatch to the right method; if a method doesn't exist,
         # defer to the error handler. Also defer to the error handler if the
         # request method isn't on the approved list.
-        if request.method.lower() in self.http_method_names:
-            handler = getattr(
-                self, request.method.lower(), self.http_method_not_allowed
-            )
+        method = request.method.lower()
+        if method in self.http_method_names:
+            handler = getattr(self, method, self.http_method_not_allowed)
         else:
             handler = self.http_method_not_allowed
         return handler(request, *args, **kwargs)
 
     def http_method_not_allowed(self, request, *args, **kwargs):
-        logger.warning(
+        response = HttpResponseNotAllowed(self._allowed_methods())
+        log_response(
             "Method Not Allowed (%s): %s",
             request.method,
             request.path,
-            extra={"status_code": 405, "request": request},
+            response=response,
+            request=request,
         )
-        response = HttpResponseNotAllowed(self._allowed_methods())
 
         if self.view_is_async:
 
@@ -234,6 +235,7 @@ class RedirectView(View):
     url = None
     pattern_name = None
     query_string = False
+    preserve_request = False
 
     def get_redirect_url(self, *args, **kwargs):
         """
@@ -250,21 +252,25 @@ class RedirectView(View):
 
         args = self.request.META.get("QUERY_STRING", "")
         if args and self.query_string:
-            url = "%s?%s" % (url, args)
+            if urlparse(url).query:
+                url = f"{url}&{args}"
+            else:
+                url = f"{url}?{args}"
         return url
 
     def get(self, request, *args, **kwargs):
         url = self.get_redirect_url(*args, **kwargs)
         if url:
             if self.permanent:
-                return HttpResponsePermanentRedirect(url)
+                return HttpResponsePermanentRedirect(
+                    url, preserve_request=self.preserve_request
+                )
             else:
-                return HttpResponseRedirect(url)
+                return HttpResponseRedirect(url, preserve_request=self.preserve_request)
         else:
-            logger.warning(
-                "Gone: %s", request.path, extra={"status_code": 410, "request": request}
-            )
-            return HttpResponseGone()
+            response = HttpResponseGone()
+            log_response("Gone: %s", request.path, response=response, request=request)
+            return response
 
     def head(self, request, *args, **kwargs):
         return self.get(request, *args, **kwargs)

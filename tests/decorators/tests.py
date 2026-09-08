@@ -1,8 +1,7 @@
 import asyncio
 from functools import update_wrapper, wraps
+from inspect import iscoroutinefunction
 from unittest import TestCase
-
-from asgiref.sync import iscoroutinefunction
 
 from django.contrib.admin.views.decorators import staff_member_required
 from django.contrib.auth.decorators import (
@@ -134,7 +133,8 @@ def simple_dec(func):
 simple_dec_m = method_decorator(simple_dec)
 
 
-# For testing method_decorator, two decorators that add an attribute to the function
+# For testing method_decorator, two decorators that add an attribute to the
+# function
 def myattr_dec(func):
     def wrapper(*args, **kwargs):
         return func(*args, **kwargs)

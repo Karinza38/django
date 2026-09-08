@@ -1,11 +1,13 @@
 from django.contrib import admin
-from django.contrib.admin.models import LogEntry, LogEntryManager
 from django.db import models
 from django.utils.translation import gettext_lazy as _
 
 
 class Site(models.Model):
     domain = models.CharField(max_length=100)
+    parent = models.ForeignKey(
+        "self", models.CASCADE, related_name="children", blank=True, null=True
+    )
 
     def __str__(self):
         return self.domain
@@ -41,9 +43,25 @@ class ArticleProxy(Article):
         proxy = True
 
 
-class Count(models.Model):
+class Cascade(models.Model):
     num = models.PositiveSmallIntegerField()
     parent = models.ForeignKey("self", models.CASCADE, null=True)
+
+    class Meta:
+        ordering = ("num",)
+
+    @admin.display(ordering="num")
+    def __str__(self):
+        return str(self.num)
+
+
+class DBCascade(models.Model):
+    num = models.PositiveSmallIntegerField()
+    parent = models.ForeignKey("self", models.DB_CASCADE, null=True)
+
+    class Meta:
+        ordering = ("num",)
+        required_db_features = {"supports_on_delete_db_cascade"}
 
     def __str__(self):
         return str(self.num)
@@ -87,26 +105,3 @@ class VehicleMixin(Vehicle):
 
 class Car(VehicleMixin):
     pass
-
-
-class InheritedLogEntryManager(LogEntryManager):
-    model = LogEntry
-
-    def log_action(
-        self,
-        user_id,
-        content_type_id,
-        object_id,
-        object_repr,
-        action_flag,
-        change_message="",
-    ):
-        return LogEntry.objects.create(
-            user_id=user_id,
-            content_type_id=content_type_id,
-            object_id=str(object_id),
-            # Changing actual repr to test repr
-            object_repr="Test Repr",
-            action_flag=action_flag,
-            change_message=change_message,
-        )

@@ -1,8 +1,12 @@
 import datetime
 import re
+import sys
 import urllib.parse
 from unittest import mock
 
+from mail.custombackend import FailingEmailBackend
+
+from django import forms
 from django.contrib.auth.forms import (
     AdminPasswordChangeForm,
     AdminUserCreationForm,
@@ -13,6 +17,7 @@ from django.contrib.auth.forms import (
     ReadOnlyPasswordHashField,
     ReadOnlyPasswordHashWidget,
     SetPasswordForm,
+    SetPasswordMixin,
     UserChangeForm,
     UserCreationForm,
     UsernameField,
@@ -24,13 +29,14 @@ from django.contrib.sites.models import Site
 from django.core import mail
 from django.core.exceptions import ValidationError
 from django.core.mail import EmailMultiAlternatives
-from django.forms import forms
 from django.forms.fields import CharField, Field, IntegerField
-from django.test import SimpleTestCase, TestCase, override_settings
+from django.test import RequestFactory, SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 from django.utils import translation
 from django.utils.text import capfirst
 from django.utils.translation import gettext as _
+from django.views.debug import technical_500_response
+from django.views.decorators.debug import sensitive_variables
 
 from .models.custom_user import (
     CustomUser,
@@ -346,6 +352,9 @@ class BaseUserCreationFormTest(TestDataMixin, TestCase):
                     form.fields[field_name].widget.attrs["autocomplete"], autocomplete
                 )
 
+    def test_user_creation_form_class_getitem(self):
+        self.assertIs(BaseUserCreationForm["MyCustomUser"], BaseUserCreationForm)
+
 
 class CustomUserCreationFormTest(TestDataMixin, TestCase):
 
@@ -411,6 +420,19 @@ class CustomUserCreationFormTest(TestDataMixin, TestCase):
         self.assertIs(form.is_valid(), True)
         user = form.save(commit=True)
         self.assertSequenceEqual(user.orgs.all(), [organization])
+
+    def test_custom_form_with_non_required_password(self):
+        class CustomUserCreationForm(BaseUserCreationForm):
+            password1 = forms.CharField(required=False)
+            password2 = forms.CharField(required=False)
+            another_field = forms.CharField(required=True)
+
+        data = {
+            "username": "testclientnew",
+            "another_field": "Content",
+        }
+        form = CustomUserCreationForm(data)
+        self.assertIs(form.is_valid(), True, form.errors)
 
 
 class UserCreationFormTest(BaseUserCreationFormTest):
@@ -559,7 +581,8 @@ class AuthenticationFormTest(TestDataMixin, TestCase):
         ]
     )
     def test_custom_login_allowed_policy(self):
-        # The user is inactive, but our custom form policy allows them to log in.
+        # The user is inactive, but our custom form policy allows them to log
+        # in.
         data = {
             "username": "inactive",
             "password": "password",
@@ -1072,7 +1095,9 @@ class UserChangeFormTest(TestDataMixin, TestCase):
                 "Set password",
             ),
         ]
-        password_reset_link = r'<a class="button" href="([^"]*)">([^<]*)</a>'
+        password_reset_link = (
+            r'<a role="button" class="button" href="([^"]*)">([^<]*)</a>'
+        )
         for username, expected_help_text, expected_button_label in cases:
             with self.subTest(username=username):
                 user = User.objects.get(username=username)
@@ -1134,7 +1159,10 @@ class UserChangeFormTest(TestDataMixin, TestCase):
         )
 
 
-@override_settings(TEMPLATES=AUTH_TEMPLATES)
+@override_settings(
+    TEMPLATES=AUTH_TEMPLATES,
+    MAILERS={"default": {"BACKEND": "django.core.mail.backends.locmem.EmailBackend"}},
+)
 class PasswordResetFormTest(TestDataMixin, TestCase):
     @classmethod
     def setUpClass(cls):
@@ -1211,7 +1239,7 @@ class PasswordResetFormTest(TestDataMixin, TestCase):
         self.assertEqual(len(mail.outbox), 0)
 
     def test_cleaned_data(self):
-        (user, username, email) = self.create_dummy_user()
+        user, username, email = self.create_dummy_user()
         data = {"email": email}
         form = PasswordResetForm(data)
         self.assertTrue(form.is_valid())
@@ -1247,7 +1275,7 @@ class PasswordResetFormTest(TestDataMixin, TestCase):
                     "Sorry to hear you forgot your password.",
                     None,
                     [to_email],
-                    ["site_monitor@example.com"],
+                    bcc=["site_monitor@example.com"],
                     headers={"Reply-To": "webmaster@example.com"},
                     alternatives=[
                         ("Really sorry to hear you forgot your password.", "text/html")
@@ -1280,7 +1308,7 @@ class PasswordResetFormTest(TestDataMixin, TestCase):
         """
         Inactive user cannot receive password reset email.
         """
-        (user, username, email) = self.create_dummy_user()
+        user, username, email = self.create_dummy_user()
         user.is_active = False
         user.save()
         form = PasswordResetForm({"email": email})
@@ -1303,11 +1331,11 @@ class PasswordResetFormTest(TestDataMixin, TestCase):
 
     def test_save_plaintext_email(self):
         """
-        Test the PasswordResetForm.save() method with no html_email_template_name
-        parameter passed in.
-        Test to ensure original behavior is unchanged after the parameter was added.
+        Test the PasswordResetForm.save() method with no
+        html_email_template_name parameter passed in. Test to ensure original
+        behavior is unchanged after the parameter was added.
         """
-        (user, username, email) = self.create_dummy_user()
+        user, username, email = self.create_dummy_user()
         form = PasswordResetForm({"email": email})
         self.assertTrue(form.is_valid())
         form.save()
@@ -1329,7 +1357,7 @@ class PasswordResetFormTest(TestDataMixin, TestCase):
         Test to ensure that a multipart email is sent with both text/plain
         and text/html parts.
         """
-        (user, username, email) = self.create_dummy_user()
+        user, username, email = self.create_dummy_user()
         form = PasswordResetForm({"email": email})
         self.assertTrue(form.is_valid())
         form.save(
@@ -1347,19 +1375,22 @@ class PasswordResetFormTest(TestDataMixin, TestCase):
         self.assertTrue(
             re.match(
                 r"^http://example.com/reset/[\w/-]+",
-                message.get_payload(0).get_payload(),
+                message.get_payload(0).get_content(),
             )
         )
         self.assertTrue(
             re.match(
                 r'^<html><a href="http://example.com/reset/[\w/-]+/">Link</a></html>$',
-                message.get_payload(1).get_payload(),
+                message.get_payload(1).get_content(),
             )
         )
 
-    @override_settings(EMAIL_BACKEND="mail.custombackend.FailingEmailBackend")
+    @override_settings(
+        MAILERS={"default": {"BACKEND": "mail.custombackend.FailingEmailBackend"}}
+    )
     def test_save_send_email_exceptions_are_catched_and_logged(self):
-        (user, username, email) = self.create_dummy_user()
+        self.addCleanup(FailingEmailBackend.reset)
+        user, username, email = self.create_dummy_user()
         form = PasswordResetForm({"email": email})
         self.assertTrue(form.is_valid())
 
@@ -1421,8 +1452,32 @@ class ReadOnlyPasswordHashTest(SimpleTestCase):
             "    <strong>hash</strong>: "
             "       <bdi>WmCkn9**************************************</bdi>"
             "  </p>"
-            '  <p><a class="button" href="../password/">Reset password</a></p>'
+            '  <p><a role="button" class="button" href="../password/">'
+            "Reset password</a></p>"
             "</div>",
+        )
+
+    def test_render_no_password(self):
+        widget = ReadOnlyPasswordHashWidget()
+        self.assertHTMLEqual(
+            widget.render("name", None, {}),
+            "<div><p><strong>No password set.</p><p>"
+            '<a role="button" class="button" href="../password/">Set password</a>'
+            "</p></div>",
+        )
+
+    @override_settings(
+        PASSWORD_HASHERS=["django.contrib.auth.hashers.PBKDF2PasswordHasher"]
+    )
+    def test_render_invalid_password_format(self):
+        widget = ReadOnlyPasswordHashWidget()
+        value = "pbkdf2_sh"
+        self.assertHTMLEqual(
+            widget.render("name", value, {}),
+            "<div><p>"
+            "<strong>Invalid password format or unknown hashing algorithm.</strong>"
+            '</p><p><a role="button" class="button" href="../password/">Reset password'
+            "</a></p></div>",
         )
 
     def test_readonly_field_has_changed(self):
@@ -1671,3 +1726,50 @@ class AdminUserCreationFormTest(BaseUserCreationFormTest):
         u = form.save()
         self.assertEqual(u.username, data["username"])
         self.assertFalse(u.has_usable_password())
+
+
+class SensitiveVariablesTest(TestDataMixin, TestCase):
+    @sensitive_variables("data")
+    def test_passwords_marked_as_sensitive_in_admin_forms(self):
+        data = {
+            "password1": "passwordsensitive",
+            "password2": "sensitivepassword",
+            "usable_password": "true",
+        }
+        forms = [
+            AdminUserCreationForm({**data, "username": "newusername"}),
+            AdminPasswordChangeForm(self.u1, data),
+        ]
+
+        password1_fragment = """
+         <td>password1</td>
+         <td class="code"><pre>&#x27;********************&#x27;</pre></td>
+         """
+        password2_fragment = """
+         <td>password2</td>
+         <td class="code"><pre>&#x27;********************&#x27;</pre></td>
+        """
+        error = ValueError("Forced error")
+        for form in forms:
+            with self.subTest(form=form):
+                with mock.patch.object(
+                    SetPasswordMixin, "validate_passwords", side_effect=error
+                ):
+                    try:
+                        form.is_valid()
+                    except ValueError:
+                        exc_info = sys.exc_info()
+                    else:
+                        self.fail("Form validation should have failed.")
+
+                response = technical_500_response(RequestFactory().get("/"), *exc_info)
+
+                self.assertNotContains(response, "sensitivepassword", status_code=500)
+                self.assertNotContains(response, "passwordsensitive", status_code=500)
+                self.assertContains(response, str(error), status_code=500)
+                self.assertContains(
+                    response, password1_fragment, html=True, status_code=500
+                )
+                self.assertContains(
+                    response, password2_fragment, html=True, status_code=500
+                )

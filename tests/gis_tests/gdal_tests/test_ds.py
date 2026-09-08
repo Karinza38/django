@@ -1,10 +1,16 @@
 import os
 import re
-from datetime import datetime
+from datetime import datetime, time
 from pathlib import Path
 
 from django.contrib.gis.gdal import DataSource, Envelope, GDALException, OGRGeometry
-from django.contrib.gis.gdal.field import OFTDateTime, OFTInteger, OFTReal, OFTString
+from django.contrib.gis.gdal.field import (
+    OFTDateTime,
+    OFTInteger,
+    OFTReal,
+    OFTString,
+    OFTTime,
+)
 from django.contrib.gis.geos import GEOSGeometry
 from django.test import SimpleTestCase
 
@@ -74,7 +80,7 @@ ds_list = (
     TestDS(
         "has_nulls",
         nfeat=3,
-        nfld=6,
+        nfld=7,
         geom="POLYGON",
         gtype=3,
         driver="GeoJSON",
@@ -85,6 +91,7 @@ ds_list = (
             "num": OFTReal,
             "integer": OFTInteger,
             "datetime": OFTDateTime,
+            "time": OFTTime,
             "boolean": OFTInteger,
         },
         extent=(-75.274200, 39.846504, -74.959717, 40.119040),  # Got extent from QGIS
@@ -99,10 +106,11 @@ ds_list = (
             "integer": [5, None, 8],
             "boolean": [True, None, False],
             "datetime": [
-                datetime.strptime("1994-08-14T11:32:14", datetime_format),
+                datetime(1994, 8, 14, 11, 32, 14, 123000),
                 None,
                 datetime.strptime("2018-11-29T03:02:52", datetime_format),
             ],
+            "time": [time(11, 32, 14, 123000), None, time(3, 2, 52)],
         },
         fids=range(3),
     ),
@@ -235,7 +243,7 @@ class DataSourceTest(SimpleTestCase):
         # See ticket #9448.
         def get_layer():
             # This DataSource object is not accessible outside this
-            # scope.  However, a reference should still be kept alive
+            # scope. However, a reference should still be kept alive
             # on the `Layer` returned.
             ds = DataSource(source.ds)
             return ds[0]
@@ -264,8 +272,8 @@ class DataSourceTest(SimpleTestCase):
 
                     # Making sure the fields match to an appropriate OFT type.
                     for k, v in source.fields.items():
-                        # Making sure we get the proper OGR Field instance, using
-                        # a string value index for the feature.
+                        # Making sure we get the proper OGR Field instance,
+                        # using a string value index for the feature.
                         self.assertIsInstance(feat[k], v)
                     self.assertIsInstance(feat.fields[0], str)
 
@@ -332,7 +340,7 @@ class DataSourceTest(SimpleTestCase):
         self.assertEqual(1, len(feats))
         self.assertEqual("Houston", feats[0].get("Name"))
 
-        # Clearing the spatial filter by setting it to None.  Now
+        # Clearing the spatial filter by setting it to None. Now
         # should indicate that there are 3 features in the Layer.
         lyr.spatial_filter = None
         self.assertEqual(3, len(lyr))
@@ -353,3 +361,8 @@ class DataSourceTest(SimpleTestCase):
         msg = "invalid field name: nonexistent"
         with self.assertRaisesMessage(GDALException, msg):
             ds[0].get_fields("nonexistent")
+
+    def test_datetime_with_milliseconds(self):
+        feature = DataSource(get_ds_file("has_nulls", "geojson"))[0][0]
+        for field_name in "datetime", "time":
+            self.assertEqual(feature.get(field_name).microsecond, 123000)

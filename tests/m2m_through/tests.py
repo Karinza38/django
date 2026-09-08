@@ -408,7 +408,8 @@ class M2mThroughReferentialTests(TestCase):
 
         self.assertQuerySetEqual(chris.friends.all(), [])
 
-        # Since this isn't a symmetrical relation, Tony's friend link still exists.
+        # Since this isn't a symmetrical relation, Tony's friend link still
+        # exists.
         self.assertQuerySetEqual(tony.friends.all(), ["Chris"], attrgetter("name"))
 
     def test_self_referential_non_symmetrical_both(self):
@@ -482,7 +483,7 @@ class M2mThroughReferentialTests(TestCase):
             [anne, kate],
             through_defaults={"date_friended": date_friended_set},
         )
-        self.assertSequenceEqual(tony.sym_friends.all(), [anne, kate])
+        self.assertSequenceEqual(tony.sym_friends.order_by("name"), [anne, kate])
         self.assertSequenceEqual(anne.sym_friends.all(), [tony])
         self.assertSequenceEqual(kate.sym_friends.all(), [tony])
         self.assertEqual(
@@ -533,3 +534,11 @@ class M2mThroughToFieldsTests(TestCase):
             [choice[0] for choice in field.get_choices(include_blank=False)],
             ["pea", "potato", "tomato"],
         )
+
+    def test_count(self):
+        self.assertEqual(self.curry.ingredients.count(), 3)
+        self.assertEqual(self.tomato.recipes.count(), 1)
+
+    def test_exists(self):
+        self.assertTrue(self.curry.ingredients.exists())
+        self.assertTrue(self.tomato.recipes.exists())

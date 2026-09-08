@@ -1,6 +1,5 @@
 import itertools
 
-from django.db import NotSupportedError
 from django.db.models import F
 from django.db.models.fields.tuple_lookups import (
     TupleExact,
@@ -64,9 +63,11 @@ class TupleLookupsTests(TestCase):
                 )
 
     def test_exact_subquery(self):
-        with self.assertRaisesMessage(
-            NotSupportedError, "'exact' doesn't support multi-column subqueries."
-        ):
+        msg = (
+            "The QuerySet value for the exact lookup must have 2 selected "
+            "fields (received 1)"
+        )
+        with self.assertRaisesMessage(ValueError, msg):
             subquery = Customer.objects.filter(id=self.customer_1.id)[:1]
             self.assertSequenceEqual(
                 Contact.objects.filter(customer=subquery).order_by("id"), ()
@@ -141,11 +142,11 @@ class TupleLookupsTests(TestCase):
     def test_tuple_in_subquery_must_have_2_fields(self):
         lhs = (F("customer_code"), F("company_code"))
         rhs = Customer.objects.values_list("customer_id").query
-        with self.assertRaisesMessage(
-            ValueError,
-            "'in' subquery lookup of ('customer_code', 'company_code') "
-            "must have 2 fields (received 1)",
-        ):
+        msg = (
+            "The QuerySet value for the 'in' lookup must have 2 selected "
+            "fields (received 1)"
+        )
+        with self.assertRaisesMessage(ValueError, msg):
             TupleIn(lhs, rhs)
 
     def test_tuple_in_subquery(self):
@@ -239,7 +240,7 @@ class TupleLookupsTests(TestCase):
 
     def test_lt_subquery(self):
         with self.assertRaisesMessage(
-            NotSupportedError, "'lt' doesn't support multi-column subqueries."
+            ValueError, "'lt' doesn't support multi-column subqueries."
         ):
             subquery = Customer.objects.filter(id=self.customer_1.id)[:1]
             self.assertSequenceEqual(
@@ -287,7 +288,7 @@ class TupleLookupsTests(TestCase):
 
     def test_lte_subquery(self):
         with self.assertRaisesMessage(
-            NotSupportedError, "'lte' doesn't support multi-column subqueries."
+            ValueError, "'lte' doesn't support multi-column subqueries."
         ):
             subquery = Customer.objects.filter(id=self.customer_1.id)[:1]
             self.assertSequenceEqual(
@@ -327,7 +328,7 @@ class TupleLookupsTests(TestCase):
 
     def test_gt_subquery(self):
         with self.assertRaisesMessage(
-            NotSupportedError, "'gt' doesn't support multi-column subqueries."
+            ValueError, "'gt' doesn't support multi-column subqueries."
         ):
             subquery = Customer.objects.filter(id=self.customer_1.id)[:1]
             self.assertSequenceEqual(
@@ -375,7 +376,7 @@ class TupleLookupsTests(TestCase):
 
     def test_gte_subquery(self):
         with self.assertRaisesMessage(
-            NotSupportedError, "'gte' doesn't support multi-column subqueries."
+            ValueError, "'gte' doesn't support multi-column subqueries."
         ):
             subquery = Customer.objects.filter(id=self.customer_1.id)[:1]
             self.assertSequenceEqual(
@@ -419,7 +420,7 @@ class TupleLookupsTests(TestCase):
 
     def test_isnull_subquery(self):
         with self.assertRaisesMessage(
-            NotSupportedError, "'isnull' doesn't support multi-column subqueries."
+            ValueError, "'isnull' doesn't support multi-column subqueries."
         ):
             subquery = Customer.objects.filter(id=0)[:1]
             self.assertSequenceEqual(

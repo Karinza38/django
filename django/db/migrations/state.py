@@ -1,4 +1,5 @@
 import copy
+import typing
 from collections import defaultdict
 from contextlib import contextmanager
 from functools import partial
@@ -72,9 +73,10 @@ def get_related_models_recursive(model):
 
     Relationships are either defined by explicit relational fields, like
     ForeignKey, ManyToManyField or OneToOneField, or by inheriting from another
-    model (a superclass is related to its subclasses, but not vice versa). Note,
-    however, that a model inheriting from a concrete model is also related to
-    its superclass through the implicit *_ptr OneToOneField on the subclass.
+    model (a superclass is related to its subclasses, but not vice versa).
+    Note, however, that a model inheriting from a concrete model is also
+    related to its superclass through the implicit *_ptr OneToOneField on the
+    subclass.
     """
     seen = set()
     queue = _get_related_models(model)
@@ -190,9 +192,10 @@ class ProjectState:
     def remove_model_options(self, app_label, model_name, option_name, value_to_remove):
         model_state = self.models[app_label, model_name]
         if objs := model_state.options.get(option_name):
-            model_state.options[option_name] = [
-                obj for obj in objs if tuple(obj) != tuple(value_to_remove)
-            ]
+            new_value = [obj for obj in objs if tuple(obj) != tuple(value_to_remove)]
+            if option_name in {"index_together", "unique_together"}:
+                new_value = set(normalize_together(new_value))
+            model_state.options[option_name] = new_value
         self.reload_model(app_label, model_name, delay=True)
 
     def alter_model_managers(self, app_label, model_name, managers):
@@ -323,14 +326,24 @@ class ProjectState:
                         for from_field_name in from_fields
                     ]
                 )
+            # Fix field names (e.g. for CompositePrimaryKey) to refer to the
+            # new field.
+            if field_names := getattr(field, "field_names", None):
+                if old_name in field_names:
+                    field.field_names = tuple(
+                        [
+                            new_name if field_name == old_name else field_name
+                            for field_name in field.field_names
+                        ]
+                    )
         # Fix index/unique_together to refer to the new field.
         options = model_state.options
         for option in ("index_together", "unique_together"):
             if option in options:
-                options[option] = [
-                    [new_name if n == old_name else n for n in together]
+                options[option] = {
+                    tuple(new_name if n == old_name else n for n in together)
                     for together in options[option]
-                ]
+                }
         # Fix to_fields to refer to the new field.
         delay = True
         references = get_references(self, model_key, (old_name, found))
@@ -749,7 +762,7 @@ class ModelState:
                 raise ValueError(
                     'ModelState.fields cannot be bound to a model - "%s" is.' % name
                 )
-            # Sanity-check that relation fields are NOT referring to a model class.
+            # Ensure that relation fields are NOT referring to a model class.
             if field.is_relation and hasattr(field.related_model, "_meta"):
                 raise ValueError(
                     'Model fields in "ModelState.fields" cannot refer to a model class '
@@ -959,6 +972,7 @@ class ModelState:
             bases = tuple(
                 (apps.get_model(base) if isinstance(base, str) else base)
                 for base in self.bases
+                if base != typing.Generic
             )
         except LookupError:
             raise InvalidBasesError(

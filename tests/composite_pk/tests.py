@@ -11,13 +11,13 @@ except ImportError:
 
 from django import forms
 from django.core import serializers
-from django.core.exceptions import FieldError
+from django.core.exceptions import FieldDoesNotExist, FieldError
 from django.db import IntegrityError, connection
 from django.db.models import CompositePrimaryKey
 from django.forms import modelform_factory
 from django.test import TestCase
 
-from .models import Comment, Post, Tenant, User
+from .models import Comment, Post, PostDbDefault, Tenant, TimeStamped, Token, User
 
 
 class CommentForm(forms.ModelForm):
@@ -64,6 +64,24 @@ class CompositePKTests(TestCase):
         self.assertIsNone(user.id)
         self.assertIs(user._is_pk_set(), False)
 
+    def test_pk_not_set_db_default(self):
+        post = PostDbDefault(tenant=self.tenant)
+        self.assertEqual(post.tenant_id, self.tenant.pk)
+        self.assertIsNotNone(post.id)
+        self.assertIs(post._is_pk_set(), False)
+
+    def test_eq(self):
+        self.assertEqual(User(pk=(1, 2)), User(pk=(1, 2)))
+        self.assertEqual(User(tenant_id=2, id=3), User(tenant_id=2, id=3))
+        self.assertNotEqual(User(pk=(1, 2)), User(pk=(1, 3)))
+        self.assertNotEqual(User(pk=(1, 2)), object())
+        unset = User()
+        self.assertEqual(unset, unset)
+        self.assertNotEqual(User(), unset)
+        self.assertNotEqual(User(tenant_id=1), User(tenant_id=1))
+        self.assertNotEqual(User(id=1), User(id=1))
+        self.assertNotEqual(User(tenant_id=1), User(pk=(1, 2)))
+
     def test_hash(self):
         self.assertEqual(hash(User(pk=(1, 2))), hash((1, 2)))
         self.assertEqual(hash(User(tenant_id=2, id=3)), hash((2, 3)))
@@ -109,13 +127,10 @@ class CompositePKTests(TestCase):
 
     def test_composite_pk_in_fields(self):
         user_fields = {f.name for f in User._meta.get_fields()}
-        self.assertEqual(user_fields, {"pk", "tenant", "id", "email", "comments"})
+        self.assertTrue({"pk", "tenant", "id"}.issubset(user_fields))
 
         comment_fields = {f.name for f in Comment._meta.get_fields()}
-        self.assertEqual(
-            comment_fields,
-            {"pk", "tenant", "id", "user_id", "user", "text"},
-        )
+        self.assertTrue({"pk", "tenant", "id"}.issubset(comment_fields))
 
     def test_pk_field(self):
         pk = User._meta.get_field("pk")
@@ -128,7 +143,7 @@ class CompositePKTests(TestCase):
 
     def test_error_on_comment_pk_conflict(self):
         with self.assertRaises(IntegrityError):
-            Comment.objects.create(tenant=self.tenant, id=self.comment.id)
+            Comment.objects.create(tenant=self.tenant, id=self.comment.id, user_id=1)
 
     def test_get_primary_key_columns(self):
         self.assertEqual(
@@ -150,6 +165,84 @@ class CompositePKTests(TestCase):
         result = Comment.objects.in_bulk([self.comment.pk])
         self.assertEqual(result, {self.comment.pk: self.comment})
 
+    def test_in_bulk_batching(self):
+        Comment.objects.all().delete()
+        num_objects = 10
+        connection.features.__dict__.pop("max_query_params", None)
+        with unittest.mock.patch.object(
+            type(connection.features), "max_query_params", num_objects
+        ):
+            comments = [
+                Comment(id=i, tenant=self.tenant, user=self.user)
+                for i in range(1, num_objects + 1)
+            ]
+            Comment.objects.bulk_create(comments)
+            id_list = list(Comment.objects.values_list("pk", flat=True))
+            with self.assertNumQueries(2):
+                comment_dict = Comment.objects.in_bulk(id_list=id_list)
+        self.assertCountEqual(comment_dict, id_list)
+
+    def test_in_bulk_values(self):
+        result = Comment.objects.values().in_bulk([self.comment.pk])
+        self.assertEqual(
+            result,
+            {
+                self.comment.pk: {
+                    "tenant_id": self.comment.tenant_id,
+                    "id": self.comment.id,
+                    "user_id": self.comment.user_id,
+                    "text": self.comment.text,
+                    "integer": self.comment.integer,
+                }
+            },
+        )
+
+    def test_in_bulk_values_field(self):
+        result = Comment.objects.values("text").in_bulk([self.comment.pk])
+        self.assertEqual(
+            result,
+            {self.comment.pk: {"text": self.comment.text}},
+        )
+
+    def test_in_bulk_values_fields(self):
+        result = Comment.objects.values("pk", "text").in_bulk([self.comment.pk])
+        self.assertEqual(
+            result,
+            {self.comment.pk: {"pk": self.comment.pk, "text": self.comment.text}},
+        )
+
+    def test_in_bulk_values_list(self):
+        result = Comment.objects.values_list("text").in_bulk([self.comment.pk])
+        self.assertEqual(result, {self.comment.pk: (self.comment.text,)})
+
+    def test_in_bulk_values_list_multiple_fields(self):
+        result = Comment.objects.values_list("pk", "text").in_bulk([self.comment.pk])
+        self.assertEqual(
+            result, {self.comment.pk: (self.comment.pk, self.comment.text)}
+        )
+
+    def test_in_bulk_values_list_fields_are_pk(self):
+        result = Comment.objects.values_list("tenant", "id").in_bulk([self.comment.pk])
+        self.assertEqual(
+            result, {self.comment.pk: (self.comment.tenant_id, self.comment.id)}
+        )
+
+    def test_in_bulk_values_list_flat(self):
+        result = Comment.objects.values_list("text", flat=True).in_bulk(
+            [self.comment.pk]
+        )
+        self.assertEqual(result, {self.comment.pk: self.comment.text})
+
+    def test_in_bulk_values_list_flat_pk(self):
+        result = Comment.objects.values_list("pk", flat=True).in_bulk([self.comment.pk])
+        self.assertEqual(result, {self.comment.pk: self.comment.pk})
+
+    def test_in_bulk_values_list_flat_tenant(self):
+        result = Comment.objects.values_list("tenant", flat=True).in_bulk(
+            [self.comment.pk]
+        )
+        self.assertEqual(result, {self.comment.pk: self.tenant.id})
+
     def test_iterator(self):
         """
         Test the .iterator() method of composite_pk models.
@@ -160,6 +253,20 @@ class CompositePKTests(TestCase):
     def test_query(self):
         users = User.objects.values_list("pk").order_by("pk")
         self.assertNotIn('AS "pk"', str(users.query))
+
+    def test_raw(self):
+        users = User.objects.raw("SELECT * FROM composite_pk_user")
+        self.assertEqual(len(users), 1)
+        user = users[0]
+        self.assertEqual(user.tenant_id, self.user.tenant_id)
+        self.assertEqual(user.id, self.user.id)
+        self.assertEqual(user.email, self.user.email)
+
+    def test_raw_missing_PK_fields(self):
+        query = "SELECT tenant_id, email FROM composite_pk_user"
+        msg = "Raw query must include the primary key"
+        with self.assertRaisesMessage(FieldDoesNotExist, msg):
+            list(User.objects.raw(query))
 
     def test_only(self):
         users = User.objects.only("pk")
@@ -173,8 +280,16 @@ class CompositePKTests(TestCase):
         with self.assertNumQueries(1):
             self.assertEqual(user.email, self.user.email)
 
+    def test_select_related(self):
+        Comment.objects.create(tenant=self.tenant, id=2)
+        with self.assertNumQueries(1):
+            comments = list(Comment.objects.select_related("user").order_by("pk"))
+            self.assertEqual(len(comments), 2)
+            self.assertEqual(comments[0].user, self.user)
+            self.assertIsNone(comments[1].user)
+
     def test_model_forms(self):
-        fields = ["tenant", "id", "user_id", "text"]
+        fields = ["tenant", "id", "user_id", "text", "integer"]
         self.assertEqual(list(CommentForm.base_fields), fields)
 
         form = modelform_factory(Comment, fields="__all__")
@@ -184,6 +299,16 @@ class CompositePKTests(TestCase):
             FieldError, "Unknown field(s) (pk) specified for Comment"
         ):
             self.assertIsNone(modelform_factory(Comment, fields=["pk"]))
+
+    def test_totally_ordered(self):
+        """
+        QuerySet.totally_ordered returns True when ordering by all fields of a
+        composite primary key and False when ordering by a subset.
+        """
+        qs_ordered = Token.objects.order_by("tenant_id", "id")
+        self.assertIs(qs_ordered.totally_ordered, True)
+        qs_partial = Token.objects.order_by("tenant_id")
+        self.assertIs(qs_partial.totally_ordered, False)
 
 
 class CompositePKFixturesTests(TestCase):
@@ -224,6 +349,13 @@ class CompositePKFixturesTests(TestCase):
         self.assertEqual(post_2.tenant_id, 2)
         self.assertEqual(post_2.pk, (post_2.tenant_id, post_2.id))
 
+    def assert_deserializer(self, format, users, serialized_users):
+        deserialized_user = list(serializers.deserialize(format, serialized_users))[0]
+        self.assertEqual(deserialized_user.object.email, users[0].email)
+        self.assertEqual(deserialized_user.object.id, users[0].id)
+        self.assertEqual(deserialized_user.object.tenant, users[0].tenant)
+        self.assertEqual(deserialized_user.object.pk, users[0].pk)
+
     def test_serialize_user_json(self):
         users = User.objects.filter(pk=(1, 1))
         result = serializers.serialize("json", users)
@@ -241,6 +373,7 @@ class CompositePKFixturesTests(TestCase):
                 }
             ],
         )
+        self.assert_deserializer(format="json", users=users, serialized_users=result)
 
     def test_serialize_user_jsonl(self):
         users = User.objects.filter(pk=(1, 2))
@@ -257,6 +390,7 @@ class CompositePKFixturesTests(TestCase):
                 },
             },
         )
+        self.assert_deserializer(format="jsonl", users=users, serialized_users=result)
 
     @unittest.skipUnless(HAS_YAML, "No yaml library detected")
     def test_serialize_user_yaml(self):
@@ -276,6 +410,7 @@ class CompositePKFixturesTests(TestCase):
                 },
             ],
         )
+        self.assert_deserializer(format="yaml", users=users, serialized_users=result)
 
     def test_serialize_user_python(self):
         users = User.objects.filter(pk=(2, 4))
@@ -294,6 +429,18 @@ class CompositePKFixturesTests(TestCase):
                 },
             ],
         )
+        self.assert_deserializer(format="python", users=users, serialized_users=result)
+
+    def test_serialize_user_xml(self):
+        users = User.objects.filter(pk=(1, 1))
+        result = serializers.serialize("xml", users)
+        self.assertIn('<object model="composite_pk.user" pk=\'["1", "1"]\'>', result)
+        self.assert_deserializer(format="xml", users=users, serialized_users=result)
+
+    def test_serialize_unsaved_user_xml_omits_pk(self):
+        result = serializers.serialize("xml", [User()])
+        self.assertIn('<object model="composite_pk.user">', result)
+        self.assertNotIn(" pk=", result)
 
     def test_serialize_post_uuid(self):
         posts = Post.objects.filter(pk=(2, "11111111-1111-1111-1111-111111111111"))
@@ -311,3 +458,28 @@ class CompositePKFixturesTests(TestCase):
                 },
             ],
         )
+
+    def test_serialize_datetime(self):
+        result = serializers.serialize("json", TimeStamped.objects.all())
+        self.assertEqual(
+            json.loads(result),
+            [
+                {
+                    "model": "composite_pk.timestamped",
+                    "pk": [1, "2022-01-12T05:55:14.956"],
+                    "fields": {
+                        "id": 1,
+                        "created": "2022-01-12T05:55:14.956",
+                        "text": "",
+                    },
+                },
+            ],
+        )
+
+    def test_invalid_pk_extra_field(self):
+        json = (
+            '[{"fields": {"email": "user0001@example.com", "id": 1, "tenant": 1}, '
+            '"pk": [1, 1, "extra"], "model": "composite_pk.user"}]'
+        )
+        with self.assertRaises(serializers.base.DeserializationError):
+            next(serializers.deserialize("json", json))

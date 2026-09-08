@@ -1,10 +1,19 @@
+import itertools
+import unittest
+from typing import TYPE_CHECKING
+
 from django.conf import settings
 from django.core.checks.messages import Error, Warning
 from django.core.checks.security import base, csrf, sessions
 from django.core.management.utils import get_random_secret_key
 from django.test import SimpleTestCase
 from django.test.utils import override_settings
+from django.utils.csp import CSP
+from django.utils.version import PY314
 from django.views.generic import View
+
+if TYPE_CHECKING:
+    from django.http.request import HttpRequest
 
 
 class CheckSessionCookieSecureTest(SimpleTestCase):
@@ -213,8 +222,8 @@ class CheckStrictTransportSecurityTest(SimpleTestCase):
     @override_settings(MIDDLEWARE=[], SECURE_HSTS_SECONDS=0)
     def test_no_sts_no_middleware(self):
         """
-        Don't warn if SECURE_HSTS_SECONDS isn't > 0 and SecurityMiddleware isn't
-        installed.
+        Don't warn if SECURE_HSTS_SECONDS isn't > 0 and SecurityMiddleware
+        isn't installed.
         """
         self.assertEqual(base.check_sts(None), [])
 
@@ -611,6 +620,12 @@ def failure_view_with_invalid_signature():
     pass
 
 
+if PY314:
+
+    def failure_view_with_deferred_annotations(request: HttpRequest, reason: str):
+        pass
+
+
 good_class_based_csrf_failure_view = View.as_view()
 
 
@@ -651,6 +666,15 @@ class CSRFFailureViewTest(SimpleTestCase):
     def test_failure_view_valid_class_based(self):
         self.assertEqual(csrf.check_csrf_failure_view(None), [])
 
+    @unittest.skipUnless(PY314, "Deferred annotations are Python 3.14+ only")
+    @override_settings(
+        CSRF_FAILURE_VIEW=(
+            "check_framework.test_security.failure_view_with_deferred_annotations"
+        ),
+    )
+    def test_failure_view_valid_deferred_annotations(self):
+        self.assertEqual(csrf.check_csrf_failure_view(None), [])
+
 
 class CheckCrossOriginOpenerPolicyTest(SimpleTestCase):
     @override_settings(
@@ -678,3 +702,148 @@ class CheckCrossOriginOpenerPolicyTest(SimpleTestCase):
     )
     def test_with_invalid_coop(self):
         self.assertEqual(base.check_cross_origin_opener_policy(None), [base.E024])
+
+
+class CheckSecureCSPTests(SimpleTestCase):
+    """Tests for the CSP settings check function."""
+
+    django_templates_with_csp = [
+        {
+            "BACKEND": "django.template.backends.django.DjangoTemplates",
+            "OPTIONS": {
+                "context_processors": ["django.template.context_processors.csp"],
+            },
+        },
+    ]
+    jinja2_templates_with_csp = [
+        {
+            "BACKEND": "django.template.backends.jinja2.Jinja2",
+            "OPTIONS": {
+                "context_processors": ["django.template.context_processors.csp"],
+            },
+        },
+    ]
+
+    def test_secure_csp_allowed_values(self):
+        """Check should pass when both CSP settings are None or dicts."""
+        allowed_values = (None, {}, {"key": "value"})
+        combinations = itertools.product(allowed_values, repeat=2)
+        for csp_value, csp_report_only_value in combinations:
+            with (
+                self.subTest(
+                    csp_value=csp_value, csp_report_only_value=csp_report_only_value
+                ),
+                self.settings(
+                    SECURE_CSP=csp_value, SECURE_CSP_REPORT_ONLY=csp_report_only_value
+                ),
+            ):
+                errors = base.check_csp_settings(None)
+                self.assertEqual(errors, [])
+
+    def test_secure_csp_invalid_values(self):
+        """Check should fail when either CSP setting is not a dict."""
+        for value in (
+            False,
+            True,
+            0,
+            42,
+            "",
+            "not-a-dict",
+            set(),
+            {"a", "b"},
+            [],
+            [1, 2, 3, 4],
+        ):
+            with self.subTest(value=value):
+                csp_error = Error(
+                    base.E026.msg % ("SECURE_CSP", value), id=base.E026.id
+                )
+                with self.settings(SECURE_CSP=value):
+                    errors = base.check_csp_settings(None)
+                    self.assertEqual(errors, [csp_error])
+                csp_report_only_error = Error(
+                    base.E026.msg % ("SECURE_CSP_REPORT_ONLY", value), id=base.E026.id
+                )
+                with self.settings(SECURE_CSP_REPORT_ONLY=value):
+                    errors = base.check_csp_settings(None)
+                    self.assertEqual(errors, [csp_report_only_error])
+                with self.settings(SECURE_CSP=value, SECURE_CSP_REPORT_ONLY=value):
+                    errors = base.check_csp_settings(None)
+                    self.assertEqual(errors, [csp_error, csp_report_only_error])
+
+    @override_settings(
+        MIDDLEWARE=["django.middleware.csp.ContentSecurityPolicyMiddleware"],
+        SECURE_CSP={"script-src": [CSP.SELF, CSP.NONCE]},
+        SECURE_CSP_REPORT_ONLY={},
+        TEMPLATES=[],
+    )
+    def test_secure_csp_nonce_without_context_processor(self):
+        self.assertEqual(base.check_csp_nonce_context_processor(None), [base.W027])
+
+    @override_settings(
+        MIDDLEWARE=["django.middleware.csp.ContentSecurityPolicyMiddleware"],
+        SECURE_CSP={},
+        SECURE_CSP_REPORT_ONLY={"script-src": [CSP.SELF, CSP.NONCE]},
+        TEMPLATES=[],
+    )
+    def test_secure_csp_report_only_nonce_without_context_processor(self):
+        self.assertEqual(base.check_csp_nonce_context_processor(None), [base.W027])
+
+    def test_secure_csp_nonce_iterable_values_without_context_processor(self):
+        tests = (
+            frozenset([CSP.SELF, CSP.NONCE]),
+            (value for value in [CSP.SELF, CSP.NONCE]),
+        )
+        for values in tests:
+            with (
+                self.subTest(values=values),
+                self.settings(
+                    MIDDLEWARE=[
+                        "django.middleware.csp.ContentSecurityPolicyMiddleware"
+                    ],
+                    SECURE_CSP={"script-src": values},
+                    TEMPLATES=[],
+                ),
+            ):
+                self.assertEqual(
+                    base.check_csp_nonce_context_processor(None), [base.W027]
+                )
+
+    def test_secure_csp_nonce_context_processor_allowed_values(self):
+        tests = [
+            {
+                "MIDDLEWARE": ["django.middleware.csp.ContentSecurityPolicyMiddleware"],
+                "SECURE_CSP": None,
+                "SECURE_CSP_REPORT_ONLY": None,
+                "TEMPLATES": [],
+            },
+            {
+                "MIDDLEWARE": [],
+                "SECURE_CSP": {"script-src": [CSP.SELF, CSP.NONCE]},
+                "TEMPLATES": [],
+            },
+            {
+                "MIDDLEWARE": ["django.middleware.csp.ContentSecurityPolicyMiddleware"],
+                "SECURE_CSP": {"script-src": [CSP.SELF]},
+                "TEMPLATES": [],
+            },
+            {
+                "MIDDLEWARE": ["django.middleware.csp.ContentSecurityPolicyMiddleware"],
+                "SECURE_CSP": {"upgrade-insecure-requests": True},
+                "TEMPLATES": [],
+            },
+            {
+                "MIDDLEWARE": ["django.middleware.csp.ContentSecurityPolicyMiddleware"],
+                "SECURE_CSP": {"script-src": [CSP.SELF, CSP.NONCE]},
+                "TEMPLATES": self.django_templates_with_csp,
+            },
+            {
+                "MIDDLEWARE": ["django.middleware.csp.ContentSecurityPolicyMiddleware"],
+                "SECURE_CSP": {"script-src": [CSP.SELF, CSP.NONCE]},
+                "TEMPLATES": self.jinja2_templates_with_csp,
+            },
+        ]
+        for settings_overrides in tests:
+            with self.subTest(settings_overrides=settings_overrides):
+                with self.settings(**settings_overrides):
+                    self.assertEqual(base.check_csp_nonce_context_processor(None), [])

@@ -24,18 +24,14 @@ here's how we recommend you read the docs:
 * See ``docs/README`` for instructions on building an HTML version of the docs.
 
 Docs are updated rigorously. If you find any problems in the docs, or think
-they should be clarified in any way, please take 30 seconds to fill out a
-ticket here: https://code.djangoproject.com/newticket
+they should be clarified in any way, please take 30 seconds to
+`fill out a ticket <https://code.djangoproject.com/newticket>`_. You can log in
+with your GitHub account, or with a DjangoProject account if you have one. Once
+you log in, a New Ticket button is available next to View Tickets.
 
 To get more help:
 
-* Join the ``#django`` channel on ``irc.libera.chat``. Lots of helpful people
-  hang out there. `Webchat is available <https://web.libera.chat/#django>`_.
-
-* Join the django-users mailing list, or read the archives, at
-  https://groups.google.com/group/django-users.
-
-* Join the `Django Discord community <https://discord.gg/xcRH6mN4fa>`_.
+* Join the `Django Discord community <https://chat.djangoproject.com>`_.
 
 * Join the community on the `Django Forum <https://forum.djangoproject.com/>`_.
 

@@ -12,9 +12,8 @@ from django.core.files.uploadedfile import TemporaryUploadedFile
 from django.db import IntegrityError, models
 from django.test import TestCase, override_settings
 from django.test.utils import isolate_apps
-from django.utils.version import PY311
 
-from .models import Document
+from .models import Document, DocumentWithTimestamp
 
 
 class FileFieldTests(TestCase):
@@ -80,10 +79,9 @@ class FileFieldTests(TestCase):
         with self.assertRaisesMessage(FieldError, msg) as cm:
             d.save()
 
-        if PY311:
-            self.assertEqual(
-                cm.exception.__notes__, ["Pass a 'name' argument to ContentFile."]
-            )
+        self.assertEqual(
+            cm.exception.__notes__, ["Pass a 'name' argument to ContentFile."]
+        )
 
     def test_delete_content_file(self):
         file = ContentFile(b"", name="foo")
@@ -211,3 +209,9 @@ class FileFieldTests(TestCase):
 
         document = MyDocument(myfile="test_file.py")
         self.assertEqual(document.myfile.field.model, MyDocument)
+
+    def test_upload_to_callable_sees_auto_now_add_field_value(self):
+        d = DocumentWithTimestamp(myfile=ContentFile(b"content", name="foo"))
+        d.save()
+        self.assertIsNotNone(d.created_at)
+        self.assertIs(d.myfile.name.startswith(f"{d.created_at.year}/foo"), True)

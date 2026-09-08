@@ -97,6 +97,9 @@ class Owner(models.Model):
     name = models.CharField(max_length=100)
     place = models.ForeignKey(Place, models.CASCADE)
 
+    class Meta:
+        ordering = ["auto_id"]
+
     def __str__(self):
         return "%s at %s" % (self.name, self.place)
 
@@ -195,7 +198,8 @@ class Player(models.Model):
         return self.name
 
 
-# Models for testing custom ModelForm save methods in formsets and inline formsets
+# Models for testing custom ModelForm save methods in formsets and inline
+# formsets
 class Poet(models.Model):
     name = models.CharField(max_length=100)
 

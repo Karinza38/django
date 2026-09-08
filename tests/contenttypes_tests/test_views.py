@@ -1,6 +1,7 @@
 import datetime
 from unittest import mock
 
+from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.contenttypes.views import shortcut
 from django.contrib.sites.models import Site
@@ -8,7 +9,7 @@ from django.contrib.sites.shortcuts import get_current_site
 from django.http import Http404, HttpRequest
 from django.test import TestCase, override_settings
 
-from .models import (
+from .models import (  # isort:skip
     Article,
     Author,
     FooWithBrokenAbsoluteUrl,
@@ -17,17 +18,19 @@ from .models import (
     ModelWithM2MToSite,
     ModelWithNullFKToSite,
     SchemeIncludedURL,
+    Site as MockSite,
+    UUIDModel,
 )
-from .models import Site as MockSite
 
 
 @override_settings(ROOT_URLCONF="contenttypes_tests.urls")
 class ContentTypesViewsTests(TestCase):
     @classmethod
     def setUpTestData(cls):
-        # Don't use the manager to ensure the site exists with pk=1, regardless
-        # of whether or not it already exists.
-        cls.site1 = Site(pk=1, domain="testserver", name="testserver")
+        # Update the default site to use the testserver domain to avoid
+        # assertRedirects() failure: "The test client is unable to fetch
+        # remote URLs (got http://example.com/authors/1/)."
+        cls.site1 = Site(pk=settings.SITE_ID, domain="testserver", name="testserver")
         cls.site1.save()
         cls.author1 = Author.objects.create(name="Boris")
         cls.article1 = Article.objects.create(
@@ -62,7 +65,10 @@ class ContentTypesViewsTests(TestCase):
         Site.objects.clear_cache()
 
     def test_shortcut_with_absolute_url(self):
-        "Can view a shortcut for an Author object that has a get_absolute_url method"
+        """
+        Can view a shortcut for an Author object that has a get_absolute_url
+        method
+        """
         for obj in Author.objects.all():
             with self.subTest(obj=obj):
                 short_url = "/shortcut/%s/%s/" % (
@@ -178,7 +184,7 @@ class ContentTypesViewsSiteRelTests(TestCase):
         # domains in the MockSite model.
         MockSite.objects.bulk_create(
             [
-                MockSite(pk=1, domain="example.com"),
+                MockSite(pk=settings.SITE_ID, domain="example.com"),
                 MockSite(pk=self.site_2.pk, domain=self.site_2.domain),
                 MockSite(pk=self.site_3.pk, domain=self.site_3.domain),
             ]
@@ -263,3 +269,12 @@ class ShortcutViewTests(TestCase):
         obj = FooWithBrokenAbsoluteUrl.objects.create(name="john")
         with self.assertRaises(AttributeError):
             shortcut(self.request, user_ct.id, obj.id)
+
+    def test_invalid_uuid_pk_raises_404(self):
+        content_type = ContentType.objects.get_for_model(UUIDModel)
+        invalid_uuid = "1234-zzzz-5678-0000-invaliduuid"
+        with self.assertRaisesMessage(
+            Http404,
+            f"Content type {content_type.id} object {invalid_uuid} doesn’t exist",
+        ):
+            shortcut(self.request, content_type.id, invalid_uuid)

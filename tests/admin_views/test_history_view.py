@@ -1,5 +1,8 @@
+import re
+
+from playwright_tests import AdminPlaywrightTestCase
+
 from django.contrib.admin.models import CHANGE, LogEntry
-from django.contrib.admin.tests import AdminSeleniumTestCase
 from django.contrib.auth.models import User
 from django.core.paginator import Paginator
 from django.test import TestCase, override_settings
@@ -51,8 +54,8 @@ class AdminHistoryViewTests(TestCase):
 
 
 @override_settings(ROOT_URLCONF="admin_views.urls")
-class SeleniumTests(AdminSeleniumTestCase):
-    available_apps = ["admin_views"] + AdminSeleniumTestCase.available_apps
+class PlaywrightTests(AdminPlaywrightTestCase):
+    available_apps = ["admin_views"] + AdminPlaywrightTestCase.available_apps
 
     def setUp(self):
         self.superuser = User.objects.create_superuser(
@@ -66,7 +69,6 @@ class SeleniumTests(AdminSeleniumTestCase):
                 [self.superuser],
                 CHANGE,
                 change_message=f"Changed something {i}",
-                single_object=True,
             )
         self.admin_login(
             username="super",
@@ -75,29 +77,32 @@ class SeleniumTests(AdminSeleniumTestCase):
         )
 
     def test_pagination(self):
-        from selenium.webdriver.common.by import By
-
         user_history_url = reverse("admin:auth_user_history", args=(self.superuser.pk,))
-        self.selenium.get(self.live_server_url + user_history_url)
+        self.page.goto(self.live_server_url + user_history_url)
 
-        paginator = self.selenium.find_element(By.CSS_SELECTOR, ".paginator")
-        self.assertTrue(paginator.is_displayed())
-        self.assertIn("%s entries" % LogEntry.objects.count(), paginator.text)
-        self.assertIn(str(Paginator.ELLIPSIS), paginator.text)
+        paginator = self.page.locator(".paginator")
+        self.expect(paginator).to_have_role("navigation")
+        self.expect(paginator).to_have_accessible_name("Pagination user entries")
+        self.expect(self.page.locator("#pagination")).to_have_class("visually-hidden")
+        self.expect(paginator).to_be_visible()
+        aria_current_link = paginator.locator("[aria-current]")
+        self.expect(aria_current_link).to_have_count(1)
         # The current page.
-        current_page_link = self.selenium.find_element(
-            By.CSS_SELECTOR, "span.this-page"
-        )
-        self.assertEqual(current_page_link.text, "1")
+        current_page_link = aria_current_link.first
+        self.expect(current_page_link).to_have_attribute("aria-current", "page")
+        self.expect(current_page_link).to_have_attribute("href", "")
+        self.expect(paginator).to_contain_text("%s entries" % LogEntry.objects.count())
+        self.expect(paginator).to_contain_text(str(Paginator.ELLIPSIS))
+        self.expect(current_page_link).to_have_text("1")
         # The last page.
-        last_page_link = self.selenium.find_element(By.CSS_SELECTOR, ".end")
-        self.assertTrue(last_page_link.text, "20")
+        last_page_link = self.page.locator("ul > li:last-child > a")
+        self.expect(last_page_link).to_have_text("11")
         # Select the second page.
-        pages = paginator.find_elements(By.TAG_NAME, "a")
-        second_page_link = pages[0]
-        self.assertEqual(second_page_link.text, "2")
+        pages = paginator.locator("a")
+        second_page_link = pages.nth(1)
+        self.expect(second_page_link).to_have_text("2")
         second_page_link.click()
-        self.assertIn("?p=2", self.selenium.current_url)
-        rows = self.selenium.find_elements(By.CSS_SELECTOR, "#change-history tbody tr")
-        self.assertIn("Changed something 101", rows[0].text)
-        self.assertIn("Changed something 200", rows[-1].text)
+        self.expect(self.page).to_have_url(re.compile(r"\?p=2"))
+        rows = self.page.locator("#change-history tbody tr")
+        self.expect(rows.first).to_contain_text("Changed something 101")
+        self.expect(rows.last).to_contain_text("Changed something 200")

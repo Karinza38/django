@@ -18,6 +18,7 @@ class Admin2(admin.AdminSite):
     login_template = "custom_admin/login.html"
     logout_template = "custom_admin/logout.html"
     index_template = ["custom_admin/index.html"]  # a list, to test fix for #18697
+    password_change_form = forms.CustomAdminPasswordChangeForm
     password_change_template = "custom_admin/password_change_form.html"
     password_change_done_template = "custom_admin/password_change_done.html"
 
@@ -59,8 +60,19 @@ class CustomPwdTemplateUserAdmin(UserAdmin):
 
 
 class BookAdmin(admin.ModelAdmin):
+    delete_confirmation_max_display = 1
+
     def get_deleted_objects(self, objs, request):
-        return ["a deletable object"], {"books": 1}, set(), []
+        return (
+            ["a deletable object", "another object", "last object"],
+            {"books": 1},
+            set(),
+            [],
+        )
+
+
+class BookAdminZeroDisplay(BookAdmin):
+    delete_confirmation_max_display = 0
 
 
 site = Admin2(name="admin2")
@@ -79,3 +91,6 @@ site.register(models.Simple, base_admin.AttributeErrorRaisingAdmin)
 
 simple_site = Admin2(name="admin4")
 simple_site.register(User, CustomPwdTemplateUserAdmin)
+
+zero_display_site = Admin2(name="admin_zero_display")
+zero_display_site.register(models.Book, BookAdminZeroDisplay)

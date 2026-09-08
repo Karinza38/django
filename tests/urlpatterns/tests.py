@@ -14,7 +14,7 @@ from django.urls import (
     reverse,
 )
 from django.urls.converters import REGISTERED_CONVERTERS, IntConverter
-from django.utils.deprecation import RemovedInDjango60Warning
+from django.urls.utils import simplify_regex
 from django.views import View
 
 from .converters import Base64Converter, DynamicConverter
@@ -204,38 +204,24 @@ class SimplifiedURLTests(SimpleTestCase):
             path("foo/<nonexistent:var>/", empty_view)
 
     def test_warning_override_default_converter(self):
-        # RemovedInDjango60Warning: when the deprecation ends, replace with
-        # msg = "Converter 'int' is already registered."
-        # with self.assertRaisesMessage(ValueError, msg):
-        msg = (
-            "Converter 'int' is already registered. Support for overriding registered "
-            "converters is deprecated and will be removed in Django 6.0."
-        )
-        try:
-            with self.assertWarnsMessage(RemovedInDjango60Warning, msg) as ctx:
-                register_converter(IntConverter, "int")
-        finally:
-            REGISTERED_CONVERTERS.pop("int", None)
-        self.assertEqual(ctx.filename, __file__)
+        msg = "Converter 'int' is already registered."
+        with self.assertRaisesMessage(ValueError, msg):
+            register_converter(IntConverter, "int")
 
     def test_warning_override_converter(self):
-        # RemovedInDjango60Warning: when the deprecation ends, replace with
-        # msg = "Converter 'base64' is already registered."
-        # with self.assertRaisesMessage(ValueError, msg):
-        msg = (
-            "Converter 'base64' is already registered. Support for overriding "
-            "registered converters is deprecated and will be removed in Django 6.0."
-        )
+        msg = "Converter 'base64' is already registered."
         try:
-            with self.assertWarnsMessage(RemovedInDjango60Warning, msg) as ctx:
+            with self.assertRaisesMessage(ValueError, msg):
                 register_converter(Base64Converter, "base64")
                 register_converter(Base64Converter, "base64")
         finally:
             REGISTERED_CONVERTERS.pop("base64", None)
-        self.assertEqual(ctx.filename, __file__)
 
     def test_invalid_view(self):
-        msg = "view must be a callable or a list/tuple in the case of include()."
+        msg = (
+            "view must be a callable or a list/tuple in the case of include(), "
+            "but got str."
+        )
         with self.assertRaisesMessage(TypeError, msg):
             path("articles/", "invalid_view")
 
@@ -454,3 +440,127 @@ class ConversionExceptionTests(SimpleTestCase):
 
         with self.assertRaisesMessage(TypeError, "This type error propagates."):
             reverse("dynamic", kwargs={"value": object()})
+
+
+class SimplifyRegexTests(SimpleTestCase):
+    def test_simplify_regex(self):
+        tests = (
+            # Named and unnamed groups.
+            (r"^(?P<a>\w+)/b/(?P<c>\w+)/$", "/<a>/b/<c>/"),
+            (r"^(?P<a>\w+)/b/(?P<c>\w+)$", "/<a>/b/<c>"),
+            (r"^(?P<a>\w+)/b/(?P<c>\w+)", "/<a>/b/<c>"),
+            (r"^(?P<a>\w+)/b/(\w+)$", "/<a>/b/<var>"),
+            (r"^(?P<a>\w+)/b/(\w+)", "/<a>/b/<var>"),
+            (r"^(?P<a>\w+)/b/((x|y)\w+)$", "/<a>/b/<var>"),
+            (r"^(?P<a>\w+)/b/((x|y)\w+)", "/<a>/b/<var>"),
+            (r"^(?P<a>(x|y))/b/(?P<c>\w+)$", "/<a>/b/<c>"),
+            (r"^(?P<a>(x|y))/b/(?P<c>\w+)", "/<a>/b/<c>"),
+            (r"^(?P<a>(x|y))/b/(?P<c>\w+)ab", "/<a>/b/<c>ab"),
+            (r"^(?P<a>(x|y)(\(|\)))/b/(?P<c>\w+)ab", "/<a>/b/<c>ab"),
+            # Multiple unnamed groups.
+            (r"^(\w+)/b/(\w+)$", "/<var>/b/<var>"),
+            (r"^(\w+)/b/(\w+)", "/<var>/b/<var>"),
+            (r"^a/(\w+)/b/(\d+)/c/(\w+)$", "/a/<var>/b/<var>/c/<var>"),
+            (r"^(?P<a>\w+)/b/(\w+)/(\d+)$", "/<a>/b/<var>/<var>"),
+            (r"^b/((x|y)\w+)/((z|w)\d+)$", "/b/<var>/<var>"),
+            (r"^(\w+)/\((\d+)\)$", r"/<var>/(<var>)"),
+            # Non-capturing groups.
+            (r"^a(?:\w+)b", "/ab"),
+            (r"^a(?:(x|y))", "/a"),
+            (r"^(?:\w+(?:\w+))a", "/a"),
+            (r"^a(?:\w+)/b(?:\w+)", "/a/b"),
+            (r"(?P<a>\w+)/b/(?:\w+)c(?:\w+)", "/<a>/b/c"),
+            (r"(?P<a>\w+)/b/(\w+)/(?:\w+)c(?:\w+)", "/<a>/b/<var>/c"),
+            # Single and repeated metacharacters.
+            (r"^a", "/a"),
+            (r"^^a", "/a"),
+            (r"^^^a", "/a"),
+            (r"a$", "/a"),
+            (r"a$$", "/a"),
+            (r"a$$$", "/a"),
+            (r"a?", "/a"),
+            (r"a??", "/a"),
+            (r"a???", "/a"),
+            (r"a*", "/a"),
+            (r"a**", "/a"),
+            (r"a***", "/a"),
+            (r"a+", "/a"),
+            (r"a++", "/a"),
+            (r"a+++", "/a"),
+            (r"\Aa", "/a"),
+            (r"\A\Aa", "/a"),
+            (r"\A\A\Aa", "/a"),
+            (r"a\Z", "/a"),
+            (r"a\Z\Z", "/a"),
+            (r"a\Z\Z\Z", "/a"),
+            (r"\ba", "/a"),
+            (r"\b\ba", "/a"),
+            (r"\b\b\ba", "/a"),
+            (r"a\B", "/a"),
+            (r"a\B\B", "/a"),
+            (r"a\B\B\B", "/a"),
+            # Multiple mixed metacharacters.
+            (r"^a/?$", "/a/"),
+            (r"\Aa\Z", "/a"),
+            (r"\ba\B", "/a"),
+            # Escaped single metacharacters.
+            (r"\^a", r"/^a"),
+            (r"\\^a", r"/\\a"),
+            (r"\\\^a", r"/\\^a"),
+            (r"\\\\^a", r"/\\\\a"),
+            (r"\\\\\^a", r"/\\\\^a"),
+            (r"a\$", r"/a$"),
+            (r"a\\$", r"/a\\"),
+            (r"a\\\$", r"/a\\$"),
+            (r"a\\\\$", r"/a\\\\"),
+            (r"a\\\\\$", r"/a\\\\$"),
+            (r"a\?", r"/a?"),
+            (r"a\\?", r"/a\\"),
+            (r"a\\\?", r"/a\\?"),
+            (r"a\\\\?", r"/a\\\\"),
+            (r"a\\\\\?", r"/a\\\\?"),
+            (r"a\*", r"/a*"),
+            (r"a\\*", r"/a\\"),
+            (r"a\\\*", r"/a\\*"),
+            (r"a\\\\*", r"/a\\\\"),
+            (r"a\\\\\*", r"/a\\\\*"),
+            (r"a\+", r"/a+"),
+            (r"a\\+", r"/a\\"),
+            (r"a\\\+", r"/a\\+"),
+            (r"a\\\\+", r"/a\\\\"),
+            (r"a\\\\\+", r"/a\\\\+"),
+            (r"\\Aa", r"/\Aa"),
+            (r"\\\Aa", r"/\\a"),
+            (r"\\\\Aa", r"/\\\Aa"),
+            (r"\\\\\Aa", r"/\\\\a"),
+            (r"\\\\\\Aa", r"/\\\\\Aa"),
+            (r"a\\Z", r"/a\Z"),
+            (r"a\\\Z", r"/a\\"),
+            (r"a\\\\Z", r"/a\\\Z"),
+            (r"a\\\\\Z", r"/a\\\\"),
+            (r"a\\\\\\Z", r"/a\\\\\Z"),
+            # Escaped mixed metacharacters.
+            (r"^a\?$", r"/a?"),
+            (r"^a\\?$", r"/a\\"),
+            (r"^a\\\?$", r"/a\\?"),
+            (r"^a\\\\?$", r"/a\\\\"),
+            (r"^a\\\\\?$", r"/a\\\\?"),
+            # Adjacent escaped metacharacters.
+            (r"^a\?\$", r"/a?$"),
+            (r"^a\\?\\$", r"/a\\\\"),
+            (r"^a\\\?\\\$", r"/a\\?\\$"),
+            (r"^a\\\\?\\\\$", r"/a\\\\\\\\"),
+            (r"^a\\\\\?\\\\\$", r"/a\\\\?\\\\$"),
+            # Complex examples with metacharacters and (un)named groups.
+            (r"^\b(?P<slug>\w+)\B/(\w+)?", "/<slug>/<var>"),
+            (r"^\A(?P<slug>\w+)\Z", "/<slug>"),
+            # Single escaped literals.
+            (r"\/well-known", "/well-known"),
+            (r"\.well-known", "/.well-known"),
+            (r"\-well-known", "/-well-known"),
+            (r"\_well-known", "/_well-known"),
+            (r"\(well-known\)", "/(well-known)"),
+        )
+        for pattern, output in tests:
+            with self.subTest(pattern=pattern):
+                self.assertEqual(simplify_regex(pattern), output)

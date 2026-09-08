@@ -5,6 +5,7 @@ from django.conf.global_settings import PASSWORD_HASHERS
 from django.contrib.auth.hashers import (
     UNUSABLE_PASSWORD_PREFIX,
     UNUSABLE_PASSWORD_SUFFIX_LENGTH,
+    Argon2PasswordHasher,
     BasePasswordHasher,
     BCryptPasswordHasher,
     BCryptSHA256PasswordHasher,
@@ -84,8 +85,8 @@ class TestUtilsHashPass(SimpleTestCase):
         encoded = make_password("lètmein", "seasalt", "pbkdf2_sha256")
         self.assertEqual(
             encoded,
-            "pbkdf2_sha256$1000000$"
-            "seasalt$r1uLUxoxpP2Ued/qxvmje7UH9PUJBkRrvf9gGPL7Cps=",
+            "pbkdf2_sha256$1800000$"
+            "seasalt$sXv9FzN4gEo6/P8G5H1jvir9BIb5e5EkXoVGyjOniNE=",
         )
         self.assertTrue(is_password_usable(encoded))
         self.assertTrue(check_password("lètmein", encoded))
@@ -278,8 +279,8 @@ class TestUtilsHashPass(SimpleTestCase):
         encoded = hasher.encode("lètmein", "seasalt2")
         self.assertEqual(
             encoded,
-            "pbkdf2_sha256$1000000$"
-            "seasalt2$egbhFghgsJVDo5Tpg/k9ZnfbySKQ1UQnBYXhR97a7sk=",
+            "pbkdf2_sha256$1800000$"
+            "seasalt2$swjWuQn/bYIeQWF1JQRMdMdckgYo6ZXtwyjAMt8Nxdg=",
         )
         self.assertTrue(hasher.verify("lètmein", encoded))
 
@@ -287,7 +288,7 @@ class TestUtilsHashPass(SimpleTestCase):
         hasher = PBKDF2SHA1PasswordHasher()
         encoded = hasher.encode("lètmein", "seasalt2")
         self.assertEqual(
-            encoded, "pbkdf2_sha1$1000000$seasalt2$3R9hvSAiAy5ARspAFy5GJ/2rjXo="
+            encoded, "pbkdf2_sha1$1800000$seasalt2$MEx5Z/KZ384PO7zdMHxMvXH2k3g="
         )
         self.assertTrue(hasher.verify("lètmein", encoded))
 
@@ -378,7 +379,8 @@ class TestUtilsHashPass(SimpleTestCase):
             # Revert to the old iteration count and ...
             hasher.iterations = old_iterations
 
-            # ... check if the password would get updated to the new iteration count.
+            # ... check if the password would get updated to the new iteration
+            # count.
             self.assertTrue(check_password("letmein", encoded, setter))
             self.assertTrue(state["upgraded"])
         finally:
@@ -519,6 +521,62 @@ class TestUtilsHashPass(SimpleTestCase):
                 with self.subTest(hasher_class.__name__, salt=salt):
                     with self.assertRaisesMessage(ValueError, msg):
                         hasher.encode("password", salt)
+
+    def assertHasherVerifiesStrAndBytes(self, hasher, salts):
+        """
+        If a string representation exists for a bytes password, then both
+        representations will verify against whichever form was stored.
+        Otherwise, only the bytes representation will verify.
+        """
+        for pass_str, pass_bytes in [
+            ("password", b"password"),
+            # Valid UTF-8, but not ASCII.
+            ("Lösenord", "Lösenord".encode()),
+            # Not UTF-8.
+            ("", b"non-utf-8-\xc0"),
+        ]:
+            with self.subTest(hasher=hasher.__class__.__name__, password=pass_bytes):
+                for password in (pass_str, pass_bytes):
+                    if not password:
+                        continue
+                    for salt in salts:
+                        encoded = hasher.encode(password, salt)
+                        self.assertIs(hasher.verify(pass_bytes, encoded), True)
+                        if not pass_str:
+                            continue
+                        self.assertIs(hasher.verify(pass_str, encoded), True)
+
+    def test_password_and_salt_in_str_and_bytes(self):
+        hasher_classes = [
+            MD5PasswordHasher,
+            PBKDF2PasswordHasher,
+            PBKDF2SHA1PasswordHasher,
+            ScryptPasswordHasher,
+        ]
+        for hasher_class in hasher_classes:
+            hasher = hasher_class()
+            self.assertHasherVerifiesStrAndBytes(
+                hasher, [hasher.salt(), hasher.salt().encode()]
+            )
+
+    @skipUnless(argon2, "argon2-cffi not installed")
+    def test_password_and_salt_in_str_and_bytes_argon2(self):
+        hasher = Argon2PasswordHasher()
+        self.assertHasherVerifiesStrAndBytes(
+            hasher, [hasher.salt(), hasher.salt().encode()]
+        )
+
+    @skipUnless(bcrypt, "bcrypt not installed")
+    def test_password_and_salt_in_str_and_bytes_bcrypt(self):
+        hasher_classes = [
+            BCryptPasswordHasher,
+            BCryptSHA256PasswordHasher,
+        ]
+        for hasher_class in hasher_classes:
+            hasher = hasher_class()
+            self.assertHasherVerifiesStrAndBytes(
+                hasher, [hasher.salt().decode(), hasher.salt()]
+            )
 
     def test_encode_password_required(self):
         hasher_classes = [

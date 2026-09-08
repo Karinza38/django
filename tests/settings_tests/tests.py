@@ -105,7 +105,7 @@ class FullyDecoratedTestCase(TestCase):
 class ClassDecoratedTestCaseSuper(TestCase):
     """
     Dummy class for testing max recursion error in child class call to
-    super().  Refs #17011.
+    super(). Refs #17011.
     """
 
     def test_max_recursion_error(self):
@@ -205,7 +205,8 @@ class SettingsTests(SimpleTestCase):
             getattr(settings, "TEST")
 
     def test_class_decorator(self):
-        # SimpleTestCase can be decorated by override_settings, but not ut.TestCase
+        # SimpleTestCase can be decorated by override_settings, but not
+        # ut.TestCase
         class SimpleTestCaseSubclass(SimpleTestCase):
             pass
 
@@ -338,6 +339,17 @@ class SettingsTests(SimpleTestCase):
         with self.assertRaisesMessage(ValueError, "Incorrect timezone setting: test"):
             settings._setup()
 
+    def test_unable_to_import_settings_module(self):
+        msg = "No module named 'fake_settings_module'."
+        with self.assertRaisesMessage(ImproperlyConfigured, msg):
+            Settings("fake_settings_module")
+
+    def test_unable_to_import_a_random_module(self):
+        exc = ModuleNotFoundError("No module named 'fake_module'", name="fake_module")
+        with mock.patch("importlib.import_module", side_effect=exc):
+            with self.assertRaisesMessage(ImportError, "No module named 'fake_module'"):
+                Settings("fake_settings_module")
+
 
 class TestComplexSettingOverride(SimpleTestCase):
     def setUp(self):
@@ -467,7 +479,8 @@ class IsOverriddenTest(SimpleTestCase):
 class TestListSettings(SimpleTestCase):
     """
     Make sure settings that should be lists or tuples throw
-    ImproperlyConfigured if they are set to a string instead of a list or tuple.
+    ImproperlyConfigured if they are set to a string instead of a list or
+    tuple.
     """
 
     list_or_tuple_settings = (

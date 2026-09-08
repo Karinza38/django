@@ -10,14 +10,12 @@ import operator
 import os
 import re
 import uuid
-import warnings
 from decimal import Decimal, DecimalException
 from io import BytesIO
-from urllib.parse import urlsplit, urlunsplit
 
-from django.conf import settings
 from django.core import validators
 from django.core.exceptions import ValidationError
+from django.db.models.utils import get_blank_choice_label
 from django.forms.boundfield import BoundField
 from django.forms.utils import from_current_timezone, to_current_timezone
 from django.forms.widgets import (
@@ -43,10 +41,10 @@ from django.forms.widgets import (
 )
 from django.utils import formats
 from django.utils.choices import normalize_choices
+from django.utils.datastructures import OrderedSet
 from django.utils.dateparse import parse_datetime, parse_duration
-from django.utils.deprecation import RemovedInDjango60Warning
 from django.utils.duration import duration_string
-from django.utils.ipv6 import clean_ipv6_address
+from django.utils.ipv6 import MAX_IPV6_ADDRESS_LENGTH, clean_ipv6_address
 from django.utils.regex_helper import _lazy_re_compile
 from django.utils.translation import gettext_lazy as _
 from django.utils.translation import ngettext_lazy
@@ -95,6 +93,7 @@ class Field:
         "required": _("This field is required."),
     }
     empty_values = list(validators.EMPTY_VALUES)
+    bound_field_class = None
 
     def __init__(
         self,
@@ -111,6 +110,7 @@ class Field:
         disabled=False,
         label_suffix=None,
         template_name=None,
+        bound_field_class=None,
     ):
         # required -- Boolean that specifies whether the field is required.
         #             True by default.
@@ -127,19 +127,23 @@ class Field:
         # help_text -- An optional string to use as "help text" for this Field.
         # error_messages -- An optional dictionary to override the default
         #                   messages that the field will raise.
-        # show_hidden_initial -- Boolean that specifies if it is needed to render a
-        #                        hidden widget with initial value after widget.
+        # show_hidden_initial -- Boolean that specifies if it is needed to
+        #                        render a hidden widget with initial value
+        #                        after widget.
         # validators -- List of additional validators to use
         # localize -- Boolean that specifies if the field should be localized.
-        # disabled -- Boolean that specifies whether the field is disabled, that
-        #             is its widget is shown in the form but not editable.
+        # disabled -- Boolean that specifies whether the field is disabled,
+        #             that is its widget is shown in the form but not editable.
         # label_suffix -- Suffix to be added to the label. Overrides
         #                 form's label_suffix.
+        # bound_field_class -- BoundField class to use in
+        #                      Field.get_bound_field.
         self.required, self.label, self.initial = required, label, initial
         self.show_hidden_initial = show_hidden_initial
         self.help_text = help_text
         self.disabled = disabled
         self.label_suffix = label_suffix
+        self.bound_field_class = bound_field_class or self.bound_field_class
         widget = widget or self.widget
         if isinstance(widget, type):
             widget = widget()
@@ -251,7 +255,10 @@ class Field:
         Return a BoundField instance that will be used when accessing the form
         field in a template.
         """
-        return BoundField(form, self, field_name)
+        bound_field_class = (
+            self.bound_field_class or form.bound_field_class or BoundField
+        )
+        return bound_field_class(form, self, field_name)
 
     def __deepcopy__(self, memo):
         result = copy.copy(self)
@@ -723,8 +730,8 @@ class ImageField(FileField):
 
         from PIL import Image
 
-        # We need to get a file object for Pillow. We might have a path or we might
-        # have to read the data into memory.
+        # We need to get a file object for Pillow. We might have a path or we
+        # might have to read the data into memory.
         if hasattr(data, "temporary_file_path"):
             file = data.temporary_file_path()
         else:
@@ -770,53 +777,28 @@ class URLField(CharField):
     default_validators = [validators.URLValidator()]
 
     def __init__(self, *, assume_scheme=None, **kwargs):
-        if assume_scheme is None:
-            if settings.FORMS_URLFIELD_ASSUME_HTTPS:
-                assume_scheme = "https"
-            else:
-                warnings.warn(
-                    "The default scheme will be changed from 'http' to 'https' in "
-                    "Django 6.0. Pass the forms.URLField.assume_scheme argument to "
-                    "silence this warning, or set the FORMS_URLFIELD_ASSUME_HTTPS "
-                    "transitional setting to True to opt into using 'https' as the new "
-                    "default scheme.",
-                    RemovedInDjango60Warning,
-                    stacklevel=2,
-                )
-                assume_scheme = "http"
-        # RemovedInDjango60Warning: When the deprecation ends, replace with:
-        # self.assume_scheme = assume_scheme or "https"
-        self.assume_scheme = assume_scheme
+        self.assume_scheme = assume_scheme or "https"
         super().__init__(strip=True, **kwargs)
 
     def to_python(self, value):
-        def split_url(url):
-            """
-            Return a list of url parts via urlsplit(), or raise
-            ValidationError for some malformed URLs.
-            """
-            try:
-                return list(urlsplit(url))
-            except ValueError:
-                # urlsplit can raise a ValueError with some
-                # misformatted URLs.
-                raise ValidationError(self.error_messages["invalid"], code="invalid")
-
         value = super().to_python(value)
         if value:
-            url_fields = split_url(value)
-            if not url_fields[0]:
-                # If no URL scheme given, add a scheme.
-                url_fields[0] = self.assume_scheme
-            if not url_fields[1]:
-                # Assume that if no domain is provided, that the path segment
-                # contains the domain.
-                url_fields[1] = url_fields[2]
-                url_fields[2] = ""
-                # Rebuild the url_fields list, since the domain segment may now
-                # contain the path too.
-                url_fields = split_url(urlunsplit(url_fields))
-            value = urlunsplit(url_fields)
+            # Detect scheme via partition to avoid calling urlsplit() on
+            # potentially large or slow-to-normalize inputs.
+            scheme, sep, _ = value.partition(":")
+            if (
+                not sep
+                or not scheme
+                or not scheme[0].isascii()
+                or not scheme[0].isalpha()
+                or "/" in scheme
+            ):
+                # No valid scheme found -- prepend the assumed scheme. Handle
+                # scheme-relative URLs ("//example.com") separately.
+                if value.startswith("//"):
+                    value = self.assume_scheme + ":" + value
+                else:
+                    value = self.assume_scheme + "://" + value
         return value
 
 
@@ -941,7 +923,8 @@ class TypedChoiceField(ChoiceField):
 
     def _coerce(self, value):
         """
-        Validate that the value can be coerced to the right type (if not empty).
+        Validate that the value can be coerced to the right type (if not
+        empty).
         """
         if value == self.empty_value or value in self.empty_values:
             return self.empty_value
@@ -984,7 +967,8 @@ class MultipleChoiceField(ChoiceField):
         if self.required and not value:
             raise ValidationError(self.error_messages["required"], code="required")
         # Validate that each value in the value list is in self.choices.
-        for val in value:
+        # Avoid redundant validation, and keep elements ordered.
+        for val in OrderedSet(value):
             if not self.valid_value(val):
                 raise ValidationError(
                     self.error_messages["invalid_choice"],
@@ -1213,29 +1197,31 @@ class FilePathField(ChoiceField):
         self.path, self.match, self.recursive = path, match, recursive
         self.allow_files, self.allow_folders = allow_files, allow_folders
         super().__init__(choices=(), **kwargs)
+        self.set_choices()
 
+    def set_choices(self):
         if self.required:
             self.choices = []
         else:
-            self.choices = [("", "---------")]
+            self.choices = [("", get_blank_choice_label())]
 
         if self.match is not None:
             self.match_re = re.compile(self.match)
 
-        if recursive:
+        if self.recursive:
             for root, dirs, files in sorted(os.walk(self.path)):
                 if self.allow_files:
                     for f in sorted(files):
                         if self.match is None or self.match_re.search(f):
                             f = os.path.join(root, f)
-                            self.choices.append((f, f.replace(path, "", 1)))
+                            self.choices.append((f, f.replace(self.path, "", 1)))
                 if self.allow_folders:
                     for f in sorted(dirs):
                         if f == "__pycache__":
                             continue
                         if self.match is None or self.match_re.search(f):
                             f = os.path.join(root, f)
-                            self.choices.append((f, f.replace(path, "", 1)))
+                            self.choices.append((f, f.replace(self.path, "", 1)))
         else:
             choices = []
             with os.scandir(self.path) as entries:
@@ -1303,6 +1289,7 @@ class GenericIPAddressField(CharField):
         self.default_validators = validators.ip_address_validators(
             protocol, unpack_ipv4
         )
+        kwargs.setdefault("max_length", MAX_IPV6_ADDRESS_LENGTH)
         super().__init__(**kwargs)
 
     def to_python(self, value):
@@ -1310,7 +1297,9 @@ class GenericIPAddressField(CharField):
             return ""
         value = value.strip()
         if value and ":" in value:
-            return clean_ipv6_address(value, self.unpack_ipv4)
+            return clean_ipv6_address(
+                value, self.unpack_ipv4, max_length=self.max_length
+            )
         return value
 
 
@@ -1401,6 +1390,8 @@ class JSONField(CharField):
         return json.dumps(value, ensure_ascii=False, cls=self.encoder)
 
     def has_changed(self, initial, data):
+        if self.disabled:
+            return False
         if super().has_changed(initial, data):
             return True
         # For purposes of seeing whether something has changed, True isn't the

@@ -51,13 +51,14 @@ help:
 	@echo "  doctest    to run all doctests embedded in the documentation (if enabled)"
 	@echo "  spelling   to check for typos in documentation"
 	@echo "  black      to apply the black formatting to code blocks in documentation"
+	@echo "  lint       to check for linting errors in documentation"
 
 
 clean:
 	-rm -rf $(BUILDDIR)/*
 
 html:
-	$(SPHINXBUILD) -b djangohtml $(ALLSPHINXOPTS) $(BUILDDIR)/html
+	$(SPHINXBUILD) -b html $(ALLSPHINXOPTS) $(BUILDDIR)/html
 	@echo
 	@echo "Build finished. The HTML pages are in $(BUILDDIR)/html."
 
@@ -170,7 +171,33 @@ spelling:
 
 black:
 	@mkdir -p $(BUILDDIR)/black
-	find -name "*.txt" -not -path "./_build/*" -not -path "./_theme/*" \
+	@find . -name "*.txt" -not -path "./_build/*" -not -path "./_theme/*" \
 		| xargs blacken-docs --rst-literal-block; echo $$? > "$(BUILDDIR)/black/output.txt"
+	@RESULT=`cat $(BUILDDIR)/black/output.txt`; \
+	if [ "$$RESULT" -gt 0 ]; then \
+		echo "💥 📢 Code blocks in documentation must be reformatted with blacken-docs 📢 💥"; \
+		exit $$RESULT; \
+	else \
+		echo "Code blocks in documentation are properly formatted ✅"; \
+	fi
+
+lint:
+	$(PYTHON) lint.py
 	@echo
-	@echo "Code blocks reformatted"
+	@echo "Documentation lint complete."
+
+check:
+	@echo "=== Spelling check ==="; \
+	$(MAKE) --no-print-directory SPHINXOPTS="-q -W" spelling; SPELLING=$$?; \
+	echo ""; \
+	echo "=== Code formatting check ==="; \
+	$(MAKE) --no-print-directory black; BLACK=$$?; \
+	echo ""; \
+	echo "=== Lint check ==="; \
+	$(MAKE) --no-print-directory lint; LINT=$$?; \
+	echo ""; \
+	if [ $$SPELLING -ne 0 ] || [ $$BLACK -ne 0 ] || [ $$LINT -ne 0 ]; then \
+		echo "Some checks failed."; \
+		exit 1; \
+	fi; \
+	echo "All style and spelling checks passed."

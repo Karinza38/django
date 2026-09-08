@@ -8,10 +8,7 @@ from django.test import TestCase
 class FlatpageTemplateTagTests(TestCase):
     @classmethod
     def setUpTestData(cls):
-        # don't use the manager because we want to ensure the site exists
-        # with pk=1, regardless of whether or not it already exists.
-        cls.site1 = Site(pk=1, domain="example.com", name="example.com")
-        cls.site1.save()
+        cls.site1 = Site.objects.get()
         cls.fp1 = FlatPage.objects.create(
             url="/flatpage/",
             title="A Flatpage",
@@ -50,7 +47,10 @@ class FlatpageTemplateTagTests(TestCase):
         cls.fp4.sites.add(cls.site1)
 
     def test_get_flatpages_tag(self):
-        "The flatpage template tag retrieves unregistered prefixed flatpages by default"
+        """
+        The flatpage template tag retrieves unregistered prefixed flatpages by
+        default
+        """
         out = Template(
             "{% load flatpages %}"
             "{% get_flatpages as flatpages %}"
@@ -75,7 +75,10 @@ class FlatpageTemplateTagTests(TestCase):
         self.assertEqual(out, "A Flatpage,A Nested Flatpage,")
 
     def test_get_flatpages_tag_for_user(self):
-        "The flatpage template tag retrieves all flatpages for an authenticated user"
+        """
+        The flatpage template tag retrieves all flatpages for an authenticated
+        user
+        """
         me = User.objects.create_user("testuser", "test@example.com", "s3krit")
         out = Template(
             "{% load flatpages %}"
@@ -89,7 +92,10 @@ class FlatpageTemplateTagTests(TestCase):
         )
 
     def test_get_flatpages_with_prefix(self):
-        "The flatpage template tag retrieves unregistered prefixed flatpages by default"
+        """
+        The flatpage template tag retrieves unregistered prefixed flatpages by
+        default
+        """
         out = Template(
             "{% load flatpages %}"
             "{% get_flatpages '/location/' as location_flatpages %}"

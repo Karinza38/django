@@ -247,9 +247,7 @@ class Chapter(models.Model):
 
 
 class FootNote(models.Model):
-    """
-    Model added for ticket 19838
-    """
+    """Model for models.PROTECT."""
 
     chapter = models.ForeignKey(Chapter, models.PROTECT)
     note = models.CharField(max_length=40)
@@ -323,6 +321,9 @@ class ExtraTerrestrial(LifeForm):
 class Sighting(models.Model):
     et = models.ForeignKey(ExtraTerrestrial, models.CASCADE)
     place = models.CharField(max_length=100)
+
+    def __str__(self):
+        return self.place
 
 
 # Models for #18263

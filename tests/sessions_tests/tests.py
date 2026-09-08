@@ -41,9 +41,9 @@ from .models import SessionStore as CustomDatabaseSession
 
 
 class SessionTestsMixin:
-    # This does not inherit from TestCase to avoid any tests being run with this
-    # class, which wouldn't work, and to allow different TestCase subclasses to
-    # be used.
+    # This does not inherit from TestCase to avoid any tests being run with
+    # this class, which wouldn't work, and to allow different TestCase
+    # subclasses to be used.
 
     backend = None  # subclasses must specify
 
@@ -326,8 +326,8 @@ class SessionTestsMixin:
         self.assertEqual(await self.session.aget("a"), "b")
 
     def test_invalid_key(self):
-        # Submitting an invalid session key (either by guessing, or if the db has
-        # removed the key) results in a new key being generated.
+        # Submitting an invalid session key (either by guessing, or if the db
+        # has removed the key) results in a new key being generated.
         try:
             session = self.backend("1")
             session.save()
@@ -340,8 +340,8 @@ class SessionTestsMixin:
             session.delete("1")
 
     async def test_invalid_key_async(self):
-        # Submitting an invalid session key (either by guessing, or if the db has
-        # removed the key) results in a new key being generated.
+        # Submitting an invalid session key (either by guessing, or if the db
+        # has removed the key) results in a new key being generated.
         try:
             session = self.backend("1")
             await session.asave()
@@ -490,8 +490,8 @@ class SessionTestsMixin:
         )
 
     def test_get_expire_at_browser_close(self):
-        # Tests get_expire_at_browser_close with different settings and different
-        # set_expiry calls
+        # Tests get_expire_at_browser_close with different settings and
+        # different set_expiry calls
         with override_settings(SESSION_EXPIRE_AT_BROWSER_CLOSE=False):
             self.session.set_expiry(10)
             self.assertIs(self.session.get_expire_at_browser_close(), False)
@@ -513,8 +513,8 @@ class SessionTestsMixin:
             self.assertIs(self.session.get_expire_at_browser_close(), True)
 
     async def test_get_expire_at_browser_close_async(self):
-        # Tests get_expire_at_browser_close with different settings and different
-        # set_expiry calls
+        # Tests get_expire_at_browser_close with different settings and
+        # different set_expiry calls
         with override_settings(SESSION_EXPIRE_AT_BROWSER_CLOSE=False):
             await self.session.aset_expiry(10)
             self.assertIs(await self.session.aget_expire_at_browser_close(), False)
@@ -845,6 +845,23 @@ class CacheDBSessionTests(SessionTestsMixin, TestCase):
     @override_settings(
         CACHES={"default": {"BACKEND": "cache.failing_cache.CacheClass"}}
     )
+    def test_cache_delete_failure_non_fatal(self):
+        """Failing to delete from the cache does not raise errors."""
+        session = self.backend()
+        session.save()
+        session_key = session.session_key
+
+        with self.assertLogs("django.contrib.sessions", "ERROR") as cm:
+            session.delete(session_key)
+
+        # A proper ERROR log message was recorded.
+        log = cm.records[-1]
+        self.assertEqual(log.message, f"Error deleting from cache ({session._cache})")
+        self.assertEqual(str(log.exc_info[1]), "Faked exception deleting from cache")
+
+    @override_settings(
+        CACHES={"default": {"BACKEND": "cache.failing_cache.CacheClass"}}
+    )
     async def test_cache_async_set_failure_non_fatal(self):
         """Failing to write to the cache does not raise errors."""
         session = self.backend()
@@ -858,6 +875,23 @@ class CacheDBSessionTests(SessionTestsMixin, TestCase):
         self.assertEqual(log.message, f"Error saving to cache ({session._cache})")
         self.assertEqual(str(log.exc_info[1]), "Faked exception saving to cache")
 
+    @override_settings(
+        CACHES={"default": {"BACKEND": "cache.failing_cache.CacheClass"}}
+    )
+    async def test_cache_async_delete_failure_non_fatal(self):
+        """Failing to delete from the cache does not raise errors."""
+        session = self.backend()
+        await session.asave()
+        session_key = session.session_key
+
+        with self.assertLogs("django.contrib.sessions", "ERROR") as cm:
+            await session.adelete(session_key)
+
+        # A proper ERROR log message was recorded.
+        log = cm.records[-1]
+        self.assertEqual(log.message, f"Error deleting from cache ({session._cache})")
+        self.assertEqual(str(log.exc_info[1]), "Faked exception deleting from cache")
+
 
 @override_settings(USE_TZ=True)
 class CacheDBSessionWithTimeZoneTests(CacheDBSessionTests):
@@ -868,7 +902,8 @@ class FileSessionTests(SessionTestsMixin, SimpleTestCase):
     backend = FileSession
 
     def setUp(self):
-        # Do file session tests in an isolated directory, and kill it after we're done.
+        # Do file session tests in an isolated directory, and kill it after
+        # we're done.
         self.original_session_file_path = settings.SESSION_FILE_PATH
         self.temp_session_store = settings.SESSION_FILE_PATH = self.mkdtemp()
         self.addCleanup(shutil.rmtree, self.temp_session_store)
@@ -1021,6 +1056,7 @@ class SessionMiddlewareTests(TestCase):
         # Handle the response through the middleware
         response = middleware(request)
         self.assertIs(response.cookies[settings.SESSION_COOKIE_NAME]["secure"], True)
+        self.assertEqual(response.headers["Vary"], "Cookie")
 
     @override_settings(SESSION_COOKIE_HTTPONLY=True)
     def test_httponly_session_cookie(self):
@@ -1161,6 +1197,7 @@ class SessionMiddlewareTests(TestCase):
             ),
             str(response.cookies[settings.SESSION_COOKIE_NAME]),
         )
+        self.assertEqual(response.headers["Vary"], "Cookie")
 
     def test_flush_empty_without_session_cookie_doesnt_set_cookie(self):
         def response_ending_session(request):
@@ -1176,6 +1213,32 @@ class SessionMiddlewareTests(TestCase):
         # A cookie should not be set.
         self.assertEqual(response.cookies, {})
         # The session is accessed so "Vary: Cookie" should be set.
+        self.assertEqual(response.headers["Vary"], "Cookie")
+
+    @override_settings(SESSION_SAVE_EVERY_REQUEST=True)
+    def test_save_every_request_with_non_empty_session_renews_session_cookie(self):
+        request = self.request_factory.get("/")
+        middleware = SessionMiddleware(self.get_response_touching_session)
+
+        # Make sure the request has a session.
+        middleware(request)
+
+        # A cookie should be set.
+        self.assertIs(request.session.is_empty(), False)
+        self.assertEqual(request.session["hello"], "world")
+
+        request.COOKIES[settings.SESSION_COOKIE_NAME] = request.session.session_key
+
+        def simple_view(request):
+            return HttpResponse("Session test")
+
+        middleware = SessionMiddleware(simple_view)
+        response = middleware(request)
+
+        # A cookie should be set because SESSION_SAVE_EVERY_REQUEST=True,
+        # even though the session wasn't touched.
+        self.assertIn(settings.SESSION_COOKIE_NAME, response.cookies)
+        # There's a session, so also Vary on it.
         self.assertEqual(response.headers["Vary"], "Cookie")
 
     def test_empty_session_saved(self):
@@ -1247,7 +1310,8 @@ class CookieSessionTests(SessionTestsMixin, SimpleTestCase):
 
     @unittest.expectedFailure
     def test_actual_expiry(self):
-        # The cookie backend doesn't handle non-default expiry dates, see #19201
+        # The cookie backend doesn't handle non-default expiry dates, see
+        # #19201
         super().test_actual_expiry()
 
     async def test_actual_expiry_async(self):
@@ -1371,3 +1435,14 @@ class SessionBaseTests(SimpleTestCase):
 
     def test_is_empty(self):
         self.assertIs(self.session.is_empty(), True)
+
+    def test_bool(self):
+        # Empty session is falsy
+        self.assertIs(bool(self.session), False)
+        # Session with data is truthy
+        self.session["foo"] = "bar"
+        self.assertIs(bool(self.session), True)
+        # Session with key but no data is truthy
+        session_with_key = SessionBase()
+        session_with_key._session_key = "testkey1234"
+        self.assertIs(bool(session_with_key), True)

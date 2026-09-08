@@ -58,7 +58,7 @@ class MySQLOperations(BaseSpatialOperations, DatabaseOperations):
         }
         if self.connection.mysql_is_mariadb:
             operators["relate"] = SpatialOperator(func="ST_Relate")
-            if self.connection.mysql_version < (11, 7):
+            if self.connection.mysql_version < (12, 0, 1):
                 del operators["coveredby"]
         else:
             operators["covers"] = SpatialOperator(func="MBRCovers")
@@ -74,10 +74,8 @@ class MySQLOperations(BaseSpatialOperations, DatabaseOperations):
         ]
         is_mariadb = self.connection.mysql_is_mariadb
         if is_mariadb:
-            if self.connection.mysql_version < (11, 7):
+            if self.connection.mysql_version < (12, 0, 1):
                 disallowed_aggregates.insert(0, models.Collect)
-        elif self.connection.mysql_version < (8, 0, 24):
-            disallowed_aggregates.insert(0, models.Collect)
         return tuple(disallowed_aggregates)
 
     function_names = {
@@ -100,9 +98,11 @@ class MySQLOperations(BaseSpatialOperations, DatabaseOperations):
             "LineLocatePoint",
             "MakeValid",
             "MemSize",
+            "NumDimensions",
             "Perimeter",
             "PointOnSurface",
             "Reverse",
+            "Rotate",
             "Scale",
             "SnapToGrid",
             "Transform",
@@ -110,7 +110,7 @@ class MySQLOperations(BaseSpatialOperations, DatabaseOperations):
         }
         if self.connection.mysql_is_mariadb:
             unsupported.remove("PointOnSurface")
-            if self.connection.mysql_version < (11, 7):
+            if self.connection.mysql_version < (12, 0, 1):
                 unsupported.update({"GeoHash", "IsValid"})
         return unsupported
 
@@ -141,7 +141,9 @@ class MySQLOperations(BaseSpatialOperations, DatabaseOperations):
 
         def converter(value, expression, connection):
             if value is not None:
-                geom = GEOSGeometryBase(read(memoryview(value)), geom_class)
+                geom = GEOSGeometryBase(
+                    read(memoryview(value), max_geom_collections=None), geom_class
+                )
                 if srid:
                     geom.srid = srid
                 return geom

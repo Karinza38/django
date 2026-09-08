@@ -48,7 +48,7 @@ class GenericRelationTests(TestCase):
     def test_reverse_relation_pk(self):
         """
         The correct column name is used for the primary key on the
-        originating model of a query.  See #12664.
+        originating model of a query. See #12664.
         """
         p = Person.objects.create(account=23, name="Chef")
         Address.objects.create(
@@ -92,7 +92,8 @@ class GenericRelationTests(TestCase):
         CharLink.objects.create(content_object=restaurant)
         charlink = CharLink.objects.latest("pk")
         self.assertIs(charlink.content_object, charlink.content_object)
-        # If the model (Cafe) uses more than one level of multi-table inheritance.
+        # If the model (Cafe) uses more than one level of multi-table
+        # inheritance.
         cafe = Cafe.objects.create()
         CharLink.objects.create(content_object=cafe)
         charlink = CharLink.objects.latest("pk")
@@ -193,10 +194,10 @@ class GenericRelationTests(TestCase):
         self.assertSequenceEqual(HasLinkThing.objects.filter(links=l1), [hs3])
         self.assertSequenceEqual(HasLinkThing.objects.filter(links=l2), [hs4])
         self.assertSequenceEqual(
-            HasLinkThing.objects.exclude(links=l2), [hs1, hs2, hs3]
+            HasLinkThing.objects.exclude(links=l2).order_by("pk"), [hs1, hs2, hs3]
         )
         self.assertSequenceEqual(
-            HasLinkThing.objects.exclude(links=l1), [hs1, hs2, hs4]
+            HasLinkThing.objects.exclude(links=l1).order_by("pk"), [hs1, hs2, hs4]
         )
 
     def test_ticket_20564(self):

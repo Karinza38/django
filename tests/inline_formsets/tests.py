@@ -1,7 +1,7 @@
 from django.forms.models import ModelForm, inlineformset_factory
 from django.test import TestCase, skipUnlessDBFeature
 
-from .models import Child, Parent, Poem, Poet, School
+from .models import Child, ChildUUIDPk, Parent, ParentUUIDPk, Poem, Poet, School
 
 
 class DeletionTests(TestCase):
@@ -57,8 +57,8 @@ class DeletionTests(TestCase):
 
     def test_change_form_deletion_when_invalid(self):
         """
-        Make sure that a change form that is filled out, but marked for deletion
-        doesn't cause validation errors.
+        Make sure that a change form that is filled out, but marked for
+        deletion doesn't cause validation errors.
         """
         PoemFormSet = inlineformset_factory(
             Poet, Poem, can_delete=True, fields="__all__"
@@ -112,6 +112,20 @@ class DeletionTests(TestCase):
             obj.father = father
             obj.save()
         self.assertEqual(school.child_set.count(), 1)
+
+    @skipUnlessDBFeature(
+        "supports_uuid4_function_in_default", "supports_expression_defaults"
+    )
+    def test_add_form_uuid_pk(self):
+        ChildFormSet = inlineformset_factory(ParentUUIDPk, ChildUUIDPk, fields=["name"])
+        data = {
+            "child_set-TOTAL_FORMS": "1",
+            "child_set-INITIAL_FORMS": "1",
+            "child_set-MAX_NUM_FORMS": "0",
+            "child_set-0-name": "child",
+        }
+        formset = ChildFormSet(data)
+        self.assertIs(formset.is_valid(), False)
 
 
 class InlineFormsetFactoryTest(TestCase):
@@ -215,3 +229,38 @@ class InlineFormsetFactoryTest(TestCase):
         )
         formset = PoemFormSet(None, instance=poet)
         formset.forms  # Trigger form instantiation to run the assert above.
+
+
+class InlineFormsetConstraintsValidationTests(TestCase):
+    def test_constraint_refs_inline_foreignkey_field(self):
+        """
+        Constraints that reference an InlineForeignKeyField should not be
+        skipped from validation (#35676).
+        """
+        ChildFormSet = inlineformset_factory(
+            Parent,
+            Child,
+            fk_name="mother",
+            fields="__all__",
+            extra=1,
+        )
+        father = Parent.objects.create(name="James")
+        school = School.objects.create(name="Hogwarts")
+        mother = Parent.objects.create(name="Lily")
+        Child.objects.create(name="Harry", father=father, mother=mother, school=school)
+        data = {
+            "mothers_children-TOTAL_FORMS": "1",
+            "mothers_children-INITIAL_FORMS": "0",
+            "mothers_children-MIN_NUM_FORMS": "0",
+            "mothers_children-MAX_NUM_FORMS": "1000",
+            "mothers_children-0-id": "",
+            "mothers_children-0-father": str(father.pk),
+            "mothers_children-0-school": str(school.pk),
+            "mothers_children-0-name": "Mary",
+        }
+        formset = ChildFormSet(instance=mother, data=data, queryset=None)
+        self.assertFalse(formset.is_valid())
+        self.assertEqual(
+            formset.errors,
+            [{"__all__": ["Constraint “unique_parents” is violated."]}],
+        )

@@ -1,14 +1,13 @@
+from datetime import datetime, timedelta
 from unittest import mock
 
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, connection, models
-from django.db.models import F
+from django.db.models import Case, F, When
 from django.db.models.constraints import BaseConstraint, UniqueConstraint
 from django.db.models.functions import Abs, Lower, Sqrt, Upper
 from django.db.transaction import atomic
 from django.test import SimpleTestCase, TestCase, skipIfDBFeature, skipUnlessDBFeature
-from django.test.utils import ignore_warnings
-from django.utils.deprecation import RemovedInDjango60Warning
 
 from .models import (
     ChildModel,
@@ -17,6 +16,7 @@ from .models import (
     GeneratedFieldVirtualProduct,
     JSONFieldModel,
     ModelWithDatabaseDefault,
+    ModelWithDatabaseDefaultExpression,
     Product,
     UniqueConstraintConditionProduct,
     UniqueConstraintDeferrable,
@@ -103,22 +103,12 @@ class BaseConstraintTests(SimpleTestCase):
             },
         )
 
-    def test_deprecation(self):
-        msg = "Passing positional arguments to BaseConstraint is deprecated."
-        with self.assertRaisesMessage(RemovedInDjango60Warning, msg):
-            BaseConstraint("name", "violation error message")
-
     def test_name_required(self):
         msg = (
             "BaseConstraint.__init__() missing 1 required keyword-only argument: 'name'"
         )
         with self.assertRaisesMessage(TypeError, msg):
             BaseConstraint()
-
-    @ignore_warnings(category=RemovedInDjango60Warning)
-    def test_positional_arguments(self):
-        c = BaseConstraint("name", "custom %(name)s message")
-        self.assertEqual(c.get_violation_error_message(), "custom name message")
 
 
 class CheckConstraintTests(TestCase):
@@ -372,6 +362,22 @@ class CheckConstraintTests(TestCase):
             constraint_with_pk.validate(ChildModel, ChildModel(id=1, age=1))
         constraint_with_pk.validate(ChildModel, ChildModel(pk=1, age=1), exclude={"pk"})
 
+    def test_validate_fk_attname(self):
+        constraint_with_fk = models.CheckConstraint(
+            condition=models.Q(uniqueconstraintproduct_ptr_id__isnull=False),
+            name="parent_ptr_present",
+        )
+        with self.assertRaisesMessage(
+            ValidationError, "Constraint “parent_ptr_present” is violated."
+        ):
+            constraint_with_fk.validate(
+                ChildUniqueConstraintProduct, ChildUniqueConstraintProduct()
+            )
+        constraint_with_fk.validate(
+            ChildUniqueConstraintProduct,
+            ChildUniqueConstraintProduct(uniqueconstraintproduct_ptr_id=1),
+        )
+
     @skipUnlessDBFeature("supports_json_field")
     def test_validate_jsonfield_exact(self):
         data = {"release": "5.0.2", "version": "stable"}
@@ -408,23 +414,6 @@ class CheckConstraintTests(TestCase):
         # Excluding referenced or generated fields should skip validation.
         constraint.validate(model, invalid_product, exclude={"price"})
         constraint.validate(model, invalid_product, exclude={"rebate"})
-
-    def test_check_deprecation(self):
-        msg = "CheckConstraint.check is deprecated in favor of `.condition`."
-        condition = models.Q(foo="bar")
-        with self.assertWarnsMessage(RemovedInDjango60Warning, msg) as ctx:
-            constraint = models.CheckConstraint(name="constraint", check=condition)
-        self.assertEqual(ctx.filename, __file__)
-        with self.assertWarnsMessage(RemovedInDjango60Warning, msg) as ctx:
-            self.assertIs(constraint.check, condition)
-        self.assertEqual(ctx.filename, __file__)
-        other_condition = models.Q(something="else")
-        with self.assertWarnsMessage(RemovedInDjango60Warning, msg) as ctx:
-            constraint.check = other_condition
-        self.assertEqual(ctx.filename, __file__)
-        with self.assertWarnsMessage(RemovedInDjango60Warning, msg) as ctx:
-            self.assertIs(constraint.check, other_condition)
-        self.assertEqual(ctx.filename, __file__)
 
     def test_database_default(self):
         models.CheckConstraint(
@@ -1059,6 +1048,40 @@ class UniqueConstraintTests(TestCase):
             exclude={"name"},
         )
 
+    def test_validate_field_transform(self):
+        updated_date = datetime(2005, 7, 26)
+        UniqueConstraintProduct.objects.create(name="p1", updated=updated_date)
+        constraint = models.UniqueConstraint(
+            models.F("updated__date"), name="date_created_unique"
+        )
+        msg = "Constraint “date_created_unique” is violated."
+        with self.assertRaisesMessage(ValidationError, msg):
+            constraint.validate(
+                UniqueConstraintProduct,
+                UniqueConstraintProduct(updated=updated_date),
+            )
+        constraint.validate(
+            UniqueConstraintProduct,
+            UniqueConstraintProduct(updated=updated_date + timedelta(days=1)),
+        )
+
+    def test_validate_case_when(self):
+        UniqueConstraintProduct.objects.create(name="p1")
+        constraint = models.UniqueConstraint(
+            Case(When(color__isnull=True, then=F("name"))),
+            name="name_without_color_uniq",
+        )
+        msg = "Constraint “name_without_color_uniq” is violated."
+        with self.assertRaisesMessage(ValidationError, msg):
+            constraint.validate(
+                UniqueConstraintProduct,
+                UniqueConstraintProduct(name="p1"),
+            )
+        constraint.validate(
+            UniqueConstraintProduct,
+            UniqueConstraintProduct(name="p1", color="green"),
+        )
+
     def test_validate_ordered_expression(self):
         constraint = models.UniqueConstraint(
             Lower("name").desc(), name="name_lower_uniq_desc"
@@ -1275,6 +1298,19 @@ class UniqueConstraintTests(TestCase):
         with self.assertRaisesMessage(ValidationError, msg):
             constraint.validate(Product, Product(price=None))
 
+    @skipUnlessDBFeature("supports_comparing_boolean_expr")
+    def test_validate_nullable_condition(self):
+        UniqueConstraintProduct.objects.create(name="Product", age=42)
+        constraint = models.UniqueConstraint(
+            fields=["name"],
+            name="uniq_name_for_positive_age",
+            condition=models.Q(age__gt=0),
+        )
+        constraint.validate(
+            UniqueConstraintProduct,
+            UniqueConstraintProduct(name="Product", age=None),
+        )
+
     def test_name(self):
         constraints = get_constraints(UniqueConstraintProduct._meta.db_table)
         expected_name = "name_color_uniq"
@@ -1440,7 +1476,7 @@ class UniqueConstraintTests(TestCase):
     def test_requires_name(self):
         msg = "A unique constraint must be named."
         with self.assertRaisesMessage(ValueError, msg):
-            models.UniqueConstraint(fields=["field"])
+            models.UniqueConstraint(fields=["field"], name="")
 
     def test_database_default(self):
         models.UniqueConstraint(
@@ -1468,3 +1504,29 @@ class UniqueConstraintTests(TestCase):
                 Upper("field_with_db_default"),
                 name="unique_field_with_db_default_expression",
             ).validate(ModelWithDatabaseDefault, ModelWithDatabaseDefault())
+
+    @skipUnlessDBFeature("supports_expression_defaults")
+    def test_database_default_expression(self):
+        """
+        A field whose db_default is a non-constant expression cannot be
+        validated before the value is generated on INSERT, so the constraint
+        check is skipped.
+        """
+        ModelWithDatabaseDefaultExpression.objects.create()
+        with self.assertNumQueries(0):
+            models.UniqueConstraint(
+                fields=["field_with_db_default_expression"],
+                name="unique_field_with_db_default_expression_field",
+            ).validate(
+                ModelWithDatabaseDefaultExpression, ModelWithDatabaseDefaultExpression()
+            )
+        # A multi-field constraint containing such a field is skipped
+        # entirely, even if the other fields have concrete values.
+        with self.assertNumQueries(0):
+            models.UniqueConstraint(
+                fields=["field", "field_with_db_default_expression"],
+                name="unique_field_and_db_default_expression_field",
+            ).validate(
+                ModelWithDatabaseDefaultExpression,
+                ModelWithDatabaseDefaultExpression(field="value"),
+            )

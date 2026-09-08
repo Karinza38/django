@@ -3,6 +3,7 @@ Tests for django test runner
 """
 
 import collections.abc
+import functools
 import multiprocessing
 import os
 import sys
@@ -15,7 +16,7 @@ from django import db
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.core.management import call_command
-from django.core.management.base import CommandError, SystemCheckError
+from django.core.management.base import SystemCheckError
 from django.test import SimpleTestCase, TransactionTestCase, skipUnlessDBFeature
 from django.test.runner import (
     DiscoverRunner,
@@ -32,7 +33,6 @@ from django.test.utils import (
     get_unique_databases_and_mirrors,
     iter_test_cases,
 )
-from django.utils.version import PY312
 
 from .models import B, Person, Through
 
@@ -479,7 +479,6 @@ class ManageCommandTests(unittest.TestCase):
             )
         self.assertIn("Total run took", stderr.getvalue())
 
-    @unittest.skipUnless(PY312, "unittest --durations option requires Python 3.12")
     def test_durations(self):
         with captured_stderr() as stderr:
             call_command(
@@ -489,17 +488,6 @@ class ManageCommandTests(unittest.TestCase):
                 testrunner="test_runner.tests.MockTestRunner",
             )
         self.assertIn("durations=10", stderr.getvalue())
-
-    @unittest.skipIf(PY312, "unittest --durations option requires Python 3.12")
-    def test_durations_lt_py312(self):
-        msg = "Error: unrecognized arguments: --durations=10"
-        with self.assertRaises(CommandError, msg=msg):
-            call_command(
-                "test",
-                "--durations=10",
-                "sites",
-                testrunner="test_runner.tests.MockTestRunner",
-            )
 
 
 # Isolate from the real environment.
@@ -751,12 +739,14 @@ class TestRunnerInitializerTests(SimpleTestCase):
                     "test_runner_apps.simple.tests",
                 ]
             )
-        # Initializer must be a function.
-        self.assertIs(mocked_pool.call_args.kwargs["initializer"], _init_worker)
+        # Initializer must be a partial function binding _init_worker.
+        initializer = mocked_pool.call_args.kwargs["initializer"]
+        self.assertIsInstance(initializer, functools.partial)
+        self.assertIs(initializer.args[0], _init_worker)
         initargs = mocked_pool.call_args.kwargs["initargs"]
-        self.assertEqual(len(initargs), 7)
-        self.assertEqual(initargs[5], True)  # debug_mode
-        self.assertEqual(initargs[6], {db.DEFAULT_DB_ALIAS})  # Used database aliases.
+        self.assertEqual(len(initargs), 8)
+        self.assertEqual(initargs[6], True)  # debug_mode
+        self.assertEqual(initargs[7], {db.DEFAULT_DB_ALIAS})  # Used database aliases.
 
 
 class Ticket17477RegressionTests(AdminScriptTestCase):
@@ -809,7 +799,12 @@ class SQLiteInMemoryTestDbs(TransactionTestCase):
                     },
                 }
             )
-            with mock.patch("django.test.utils.connections", new=tested_connections):
+            with (
+                mock.patch("django.test.utils.connections", new=tested_connections),
+                mock.patch.dict(
+                    settings.DATABASES, tested_connections.settings, clear=True
+                ),
+            ):
                 other = tested_connections["other"]
                 try:
                     new_test_connections = DiscoverRunner(verbosity=0).setup_databases()
@@ -920,7 +915,8 @@ class SetupDatabasesTests(unittest.TestCase):
                 },
             }
         )
-        # Using the real current name as old_name to not mess with the test suite.
+        # Using the real current name as old_name to not mess with the test
+        # suite.
         old_name = settings.DATABASES[db.DEFAULT_DB_ALIAS]["NAME"]
         with mock.patch("django.db.connections", new=tested_connections):
             tested_connections["default"].creation.destroy_test_db(
@@ -944,8 +940,9 @@ class SetupDatabasesTests(unittest.TestCase):
             with mock.patch("django.test.utils.connections", new=tested_connections):
                 self.runner_instance.setup_databases()
         mocked_db_creation.return_value.create_test_db.assert_called_once_with(
-            verbosity=0, autoclobber=False, serialize=True, keepdb=False
+            verbosity=0, autoclobber=False, keepdb=False
         )
+        mocked_db_creation.return_value.serialize_db_to_string.assert_called_once_with()
 
 
 @skipUnlessDBFeature("supports_sequence_reset")
@@ -981,8 +978,9 @@ class AutoIncrementResetTest(TransactionTestCase):
 class EmptyDefaultDatabaseTest(unittest.TestCase):
     def test_empty_default_database(self):
         """
-        An empty default database in settings does not raise an ImproperlyConfigured
-        error when running a unit test that does not use a database.
+        An empty default database in settings does not raise an
+        ImproperlyConfigured error when running a unit test that does not use a
+        database.
         """
         tested_connections = db.ConnectionHandler({"default": {}})
         with mock.patch("django.db.connections", new=tested_connections):

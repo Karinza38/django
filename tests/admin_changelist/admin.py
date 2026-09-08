@@ -3,7 +3,17 @@ from django.contrib.auth.admin import UserAdmin
 from django.contrib.auth.models import User
 from django.core.paginator import Paginator
 
-from .models import Band, Child, Event, GrandChild, Parent, ProxyUser, Swallow
+from .models import (
+    Band,
+    Child,
+    Event,
+    Genre,
+    GrandChild,
+    MixedFieldsModel,
+    Parent,
+    ProxyUser,
+    Swallow,
+)
 
 site = admin.AdminSite(name="admin")
 
@@ -60,6 +70,13 @@ class GrandChildAdmin(admin.ModelAdmin):
 
 
 site.register(GrandChild, GrandChildAdmin)
+
+
+class MixedFieldsAdmin(admin.ModelAdmin):
+    search_fields = ["name", "choice_field__exact"]
+
+
+site.register(MixedFieldsModel, MixedFieldsAdmin)
 
 
 class CustomPaginationAdmin(ChildAdmin):
@@ -155,6 +172,14 @@ class NoListDisplayLinksParentAdmin(admin.ModelAdmin):
 
 
 site.register(Parent, NoListDisplayLinksParentAdmin)
+
+
+class ListDisplayLinksGenreAdmin(admin.ModelAdmin):
+    list_display = ["name", "file", "url"]
+    list_display_links = ["file", "url"]
+
+
+site.register(Genre, ListDisplayLinksGenreAdmin)
 
 
 class SwallowAdmin(admin.ModelAdmin):

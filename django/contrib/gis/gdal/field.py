@@ -1,4 +1,4 @@
-from ctypes import byref, c_int
+from ctypes import byref, c_float, c_int
 from datetime import date, datetime, time
 
 from django.contrib.gis.gdal.base import GDALBase
@@ -8,7 +8,7 @@ from django.utils.encoding import force_str
 
 
 # For more information, see the OGR C API source code:
-#  https://gdal.org/api/vector_c_api.html
+# https://gdal.org/api/vector_c_api.html
 #
 # The OGR_Fld_* routines are relevant here.
 class Field(GDALBase):
@@ -73,8 +73,9 @@ class Field(GDALBase):
         "Retrieve the Field's value as a tuple of date & time components."
         if not self.is_set:
             return None
-        yy, mm, dd, hh, mn, ss, tz = [c_int() for i in range(7)]
-        status = capi.get_field_as_datetime(
+        yy, mm, dd, hh, mn, tz = [c_int() for _ in range(6)]
+        ss = c_float()
+        status = capi.get_field_as_datetime_x(
             self._feat.ptr,
             self._index,
             byref(yy),
@@ -186,13 +187,23 @@ class OFTDateTime(Field):
     @property
     def value(self):
         "Return a Python `datetime` object for this OFTDateTime field."
-        # TODO: Adapt timezone information.
-        #  See https://lists.osgeo.org/pipermail/gdal-dev/2006-February/007990.html
+        # TODO: Adapt timezone information. See:
+        #  https://lists.osgeo.org/pipermail/gdal-dev/2006-February/007990.html
         #  The `tz` variable has values of: 0=unknown, 1=localtime (ambiguous),
         #  100=GMT, 104=GMT+1, 80=GMT-5, etc.
         try:
             yy, mm, dd, hh, mn, ss, tz = self.as_datetime()
-            return datetime(yy.value, mm.value, dd.value, hh.value, mn.value, ss.value)
+            seconds = int(ss.value)
+            milliseconds = int(round((ss.value - seconds) * 1000))
+            return datetime(
+                yy.value,
+                mm.value,
+                dd.value,
+                hh.value,
+                mn.value,
+                seconds,
+                milliseconds * 1000,
+            )
         except (TypeError, ValueError, GDALException):
             return None
 
@@ -203,8 +214,10 @@ class OFTTime(Field):
         "Return a Python `time` object for this OFTTime field."
         try:
             yy, mm, dd, hh, mn, ss, tz = self.as_datetime()
-            return time(hh.value, mn.value, ss.value)
-        except (ValueError, GDALException):
+            seconds = int(ss.value)
+            milliseconds = int(round((ss.value - seconds) * 1000))
+            return time(hh.value, mn.value, seconds, milliseconds * 1000)
+        except (TypeError, ValueError, GDALException):
             return None
 
 

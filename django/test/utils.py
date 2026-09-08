@@ -8,13 +8,12 @@ import time
 import warnings
 from contextlib import contextmanager
 from functools import wraps
+from inspect import iscoroutinefunction
 from io import StringIO
 from itertools import chain
 from types import SimpleNamespace
 from unittest import TestCase, skipIf, skipUnless
 from xml.dom.minidom import Node, parseString
-
-from asgiref.sync import iscoroutinefunction
 
 from django.apps import apps
 from django.apps.registry import Apps
@@ -24,7 +23,7 @@ from django.core.exceptions import ImproperlyConfigured
 from django.core.signals import request_started, setting_changed
 from django.db import DEFAULT_DB_ALIAS, connections, reset_queries
 from django.db.models.options import Options
-from django.template import Template
+from django.template import PartialTemplate, Template
 from django.test.signals import template_rendered
 from django.urls import get_script_prefix, set_script_prefix
 from django.utils.translation import deactivate
@@ -143,11 +142,22 @@ def setup_test_environment(debug=None):
     saved_data.debug = settings.DEBUG
     settings.DEBUG = debug
 
-    saved_data.email_backend = settings.EMAIL_BACKEND
-    settings.EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"
+    # RemovedInDjango2028Warning: Override MAILERS unconditionally;
+    # remove EMAIL_BACKEND override.
+    if hasattr(settings, "MAILERS"):
+        saved_data.mailers = settings.MAILERS
+        settings.MAILERS = {
+            alias: {"BACKEND": "django.core.mail.backends.locmem.EmailBackend"}
+            for alias in settings.MAILERS
+        }
+    else:
+        saved_data.email_backend = settings.EMAIL_BACKEND
+        settings.EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"
 
     saved_data.template_render = Template._render
+    saved_data.partial_template_render = PartialTemplate._render
     Template._render = instrumented_test_render
+    PartialTemplate._render = instrumented_test_render
 
     mail.outbox = []
 
@@ -163,8 +173,14 @@ def teardown_test_environment():
 
     settings.ALLOWED_HOSTS = saved_data.allowed_hosts
     settings.DEBUG = saved_data.debug
-    settings.EMAIL_BACKEND = saved_data.email_backend
+    # RemovedInDjango2028Warning: Restore MAILERS unconditionally;
+    # remove EMAIL_BACKEND support.
+    if hasattr(saved_data, "mailers"):
+        settings.MAILERS = saved_data.mailers
+    if hasattr(saved_data, "email_backend"):
+        settings.EMAIL_BACKEND = saved_data.email_backend
     Template._render = saved_data.template_render
+    PartialTemplate._render = saved_data.partial_template_render
 
     del _TestState.saved_data
     del mail.outbox
@@ -189,6 +205,7 @@ def setup_databases(
     test_databases, mirrored_aliases = get_unique_databases_and_mirrors(aliases)
 
     old_names = []
+    serialize_connections = []
 
     for db_name, aliases in test_databases.values():
         first_alias = None
@@ -200,15 +217,13 @@ def setup_databases(
             if first_alias is None:
                 first_alias = alias
                 with time_keeper.timed("  Creating '%s'" % alias):
-                    serialize_alias = (
-                        serialized_aliases is None or alias in serialized_aliases
-                    )
                     connection.creation.create_test_db(
                         verbosity=verbosity,
                         autoclobber=not interactive,
                         keepdb=keepdb,
-                        serialize=serialize_alias,
                     )
+                    if serialized_aliases is None or alias in serialized_aliases:
+                        serialize_connections.append(connection)
                 if parallel > 1:
                     for index in range(parallel):
                         with time_keeper.timed("  Cloning '%s'" % alias):
@@ -227,6 +242,16 @@ def setup_databases(
     for alias, mirror_alias in mirrored_aliases.items():
         connections[alias].creation.set_as_test_mirror(
             connections[mirror_alias].settings_dict
+        )
+
+    # Serialize content of test databases only once all of them are setup to
+    # account for database mirroring and routing during serialization. This
+    # slightly horrific process is so people who are testing on databases
+    # without transactions or using TransactionTestCase still get a clean
+    # database on every test run.
+    for serialize_connection in serialize_connections:
+        serialize_connection._test_serialized_contents = (
+            serialize_connection.creation.serialize_db_to_string()
         )
 
     if debug_sql:
@@ -628,7 +653,8 @@ def compare_xml(want, got):
     important. Ignore comment nodes, processing instructions, document type
     node, and leading and trailing whitespaces.
 
-    Based on https://github.com/lxml/lxml/blob/master/src/lxml/doctestcompare.py
+    Based on
+    https://github.com/lxml/lxml/blob/master/src/lxml/doctestcompare.py
     """
     _norm_whitespace_re = re.compile(r"[ \t\n][ \t\n]+")
 
@@ -719,12 +745,13 @@ class CaptureQueriesContext:
         self.connection.ensure_connection()
         self.initial_queries = len(self.connection.queries_log)
         self.final_queries = None
-        request_started.disconnect(reset_queries)
+        self.reset_queries_disconnected = request_started.disconnect(reset_queries)
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
         self.connection.force_debug_cursor = self.force_debug_cursor
-        request_started.connect(reset_queries)
+        if self.reset_queries_disconnected:
+            request_started.connect(reset_queries)
         if exc_type is not None:
             return
         self.final_queries = len(self.connection.queries_log)
@@ -757,6 +784,17 @@ requires_tz_support = skipUnless(
     TZ_SUPPORT,
     "This test relies on the ability to run a program in an arbitrary "
     "time zone, but your operating system isn't able to do that.",
+)
+
+
+requires_gil = skipUnless(
+    # sys._is_gil_enabled() is available on Python 3.13+, and only returns
+    # False on a free-threaded build with the GIL disabled. Assume the GIL is
+    # enabled otherwise.
+    getattr(sys, "_is_gil_enabled", lambda: True)(),
+    "This test relies on CPython's reference counting to free objects as soon "
+    "as they become unreachable, which isn't guaranteed on a free-threaded "
+    "build where the cyclic garbage collector may reclaim them instead.",
 )
 
 

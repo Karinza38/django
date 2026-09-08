@@ -5,11 +5,12 @@ import re
 import sys
 import tempfile
 import threading
+from inspect import iscoroutinefunction
 from io import StringIO
 from pathlib import Path
-from unittest import mock, skipIf, skipUnless
+from unittest import mock, skipIf
 
-from asgiref.sync import async_to_sync, iscoroutinefunction
+from asgiref.sync import async_to_sync
 
 from django.core import mail
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -24,7 +25,6 @@ from django.urls.converters import IntConverter
 from django.utils.functional import SimpleLazyObject
 from django.utils.regex_helper import _lazy_re_compile
 from django.utils.safestring import mark_safe
-from django.utils.version import PY311
 from django.views.debug import (
     CallableSettingWrapper,
     ExceptionCycleWarning,
@@ -50,6 +50,7 @@ from ..views import (
     multivalue_dict_key_error,
     non_sensitive_view,
     paranoid_view,
+    partially_sensitive_view,
     sensitive_args_function_caller,
     sensitive_kwargs_function_caller,
     sensitive_method_view,
@@ -262,6 +263,22 @@ class DebugViewTests(SimpleTestCase):
             status_code=500,
         )
 
+    def test_technical_500_content_type_negotiation(self):
+        for accepts, content_type in [
+            ("text/plain", "text/plain; charset=utf-8"),
+            ("text/html", "text/html"),
+            ("text/html,text/plain;q=0.9", "text/html"),
+            ("text/plain,text/html;q=0.9", "text/plain; charset=utf-8"),
+            ("text/*", "text/html"),
+        ]:
+            with self.subTest(accepts=accepts):
+                with self.assertLogs("django.request", "ERROR"):
+                    response = self.client.get(
+                        "/raises500/", headers={"accept": accepts}
+                    )
+                self.assertEqual(response.status_code, 500)
+                self.assertEqual(response["Content-Type"], content_type)
+
     def test_classbased_technical_500(self):
         with self.assertLogs("django.request", "ERROR"):
             response = self.client.get("/classbased500/")
@@ -381,7 +398,8 @@ class DebugViewTests(SimpleTestCase):
 
     def test_no_template_source_loaders(self):
         """
-        Make sure if you don't specify a template, the debug view doesn't blow up.
+        Make sure if you don't specify a template, the debug view doesn't blow
+        up.
         """
         with self.assertLogs("django.request", "ERROR"):
             with self.assertRaises(TemplateDoesNotExist):
@@ -405,6 +423,16 @@ class DebugViewTests(SimpleTestCase):
         response = self.client.request(**{"path": "/FORCED_PREFIX/"})
         self.assertContains(
             response, "<h1>The install worked successfully! Congratulations!</h1>"
+        )
+
+    @override_settings(ROOT_URLCONF="view_tests.default_urls")
+    def test_default_urlconf_technical_404(self):
+        response = self.client.get("/favicon.ico")
+        self.assertContains(
+            response,
+            "<code>\nadmin/\n[namespace='admin']\n</code>",
+            status_code=404,
+            html=True,
         )
 
     @override_settings(ROOT_URLCONF="view_tests.regression_21530_urls")
@@ -470,6 +498,14 @@ class DebugViewTests(SimpleTestCase):
             response = self.client.get("/raises500/", headers={"accept": "text/plain"})
         self.assertContains(response, "Oh dear, an error occurred!", status_code=500)
 
+    # RemovedInDjango2028Warning.
+    @override_settings(MAILERS={})
+    def test_works_with_mailers_defined(self):
+        with self.assertLogs("django.request", "ERROR"):
+            response = self.client.get("/raises500/")
+        self.assertContains(response, "MAILERS", status_code=500)
+        self.assertNotContains(response, "EMAIL_BACKEND", status_code=500)
+
 
 class DebugViewQueriesAllowedTests(SimpleTestCase):
     # May need a query to initialize MySQL connection
@@ -478,7 +514,8 @@ class DebugViewQueriesAllowedTests(SimpleTestCase):
     def test_handle_db_exception(self):
         """
         Ensure the debug view works when a database exception is raised by
-        performing an invalid query and passing the exception to the debug view.
+        performing an invalid query and passing the exception to the debug
+        view.
         """
         with connection.cursor() as cursor:
             try:
@@ -599,7 +636,9 @@ class ExceptionReporterTests(SimpleTestCase):
         )
 
     def test_eol_support(self):
-        """The ExceptionReporter supports Unix, Windows and Macintosh EOL markers"""
+        """
+        The ExceptionReporter supports Unix, Windows and Macintosh EOL markers
+        """
         LINES = ["print %d" % i for i in range(1, 6)]
         reporter = ExceptionReporter(None, None, None, None)
 
@@ -695,7 +734,6 @@ class ExceptionReporterTests(SimpleTestCase):
             text,
         )
 
-    @skipUnless(PY311, "Exception notes were added in Python 3.11.")
     def test_exception_with_notes(self):
         request = self.rf.get("/test_view/")
         try:
@@ -806,7 +844,6 @@ class ExceptionReporterTests(SimpleTestCase):
         or os.environ.get("PYTHONNODEBUGRANGES", False),
         "Fine-grained error locations are disabled.",
     )
-    @skipUnless(PY311, "Fine-grained error locations were added in Python 3.11.")
     def test_highlight_error_position(self):
         request = self.rf.get("/test_view/")
         try:
@@ -976,7 +1013,10 @@ class ExceptionReporterTests(SimpleTestCase):
         )
         with self.assertWarnsMessage(ExceptionCycleWarning, msg):
             tb_generator.start()
-        tb_generator.join(timeout=5)
+            # The warning is emitted in the background thread, so wait for it
+            # to finish before the assertion is checked on exiting the context
+            # manager.
+            tb_generator.join(timeout=5)
         if tb_generator.is_alive():
             # tb_generator is a daemon that runs until the main thread/process
             # exits. This is resource heavy when running the full test suite.
@@ -1027,7 +1067,10 @@ class ExceptionReporterTests(SimpleTestCase):
         self.assertIn("<p>Request data not supplied</p>", html)
 
     def test_non_utf8_values_handling(self):
-        "Non-UTF-8 exceptions/values should not make the output generation choke."
+        """
+        Non-UTF-8 exceptions/values should not make the output generation
+        choke.
+        """
         try:
 
             class NonUtf8Output(Exception):
@@ -1433,7 +1476,8 @@ class ExceptionReportTestMixin:
         self, view, check_for_vars=True, check_for_POST_params=True
     ):
         """
-        Asserts that no variables or POST parameters are displayed in the response.
+        Asserts that no variables or POST parameters are displayed in the
+        response.
         """
         request = self.rf.post("/some_url/", self.breakfast_data)
         response = view(request)
@@ -1452,9 +1496,10 @@ class ExceptionReportTestMixin:
 
     def verify_unsafe_email(self, view, check_for_POST_params=True):
         """
-        Asserts that potentially sensitive info are displayed in the email report.
+        Asserts that potentially sensitive info are displayed in the email
+        report.
         """
-        with self.settings(ADMINS=[("Admin", "admin@fattie-breakie.com")]):
+        with self.settings(ADMINS=["admin@example.com"]):
             mail.outbox = []  # Empty outbox
             request = self.rf.post("/some_url/", self.breakfast_data)
             if iscoroutinefunction(view):
@@ -1488,9 +1533,10 @@ class ExceptionReportTestMixin:
 
     def verify_safe_email(self, view, check_for_POST_params=True):
         """
-        Asserts that certain sensitive info are not displayed in the email report.
+        Asserts that certain sensitive info are not displayed in the email
+        report.
         """
-        with self.settings(ADMINS=[("Admin", "admin@fattie-breakie.com")]):
+        with self.settings(ADMINS=["admin@example.com"]):
             mail.outbox = []  # Empty outbox
             request = self.rf.post("/some_url/", self.breakfast_data)
             if iscoroutinefunction(view):
@@ -1531,9 +1577,10 @@ class ExceptionReportTestMixin:
 
     def verify_paranoid_email(self, view):
         """
-        Asserts that no variables or POST parameters are displayed in the email report.
+        Asserts that no variables or POST parameters are displayed in the email
+        report.
         """
-        with self.settings(ADMINS=[("Admin", "admin@fattie-breakie.com")]):
+        with self.settings(ADMINS=["admin@example.com"]):
             mail.outbox = []  # Empty outbox
             request = self.rf.post("/some_url/", self.breakfast_data)
             view(request)
@@ -1552,7 +1599,10 @@ class ExceptionReportTestMixin:
                 self.assertNotIn(v, body)
 
 
-@override_settings(ROOT_URLCONF="view_tests.urls")
+@override_settings(
+    ROOT_URLCONF="view_tests.urls",
+    MAILERS={"default": {"BACKEND": "django.core.mail.backends.locmem.EmailBackend"}},
+)
 class ExceptionReporterFilterTests(
     ExceptionReportTestMixin, LoggingCaptureMixin, SimpleTestCase
 ):
@@ -1626,6 +1676,20 @@ class ExceptionReporterFilterTests(
         with self.settings(DEBUG=False):
             self.verify_paranoid_response(paranoid_view)
             self.verify_paranoid_email(paranoid_view)
+
+    def test_partially_sensitive_request(self):
+        """
+        No POST parameters can be seen in the default error reports for views
+        decorated with the no-argument form of sensitive_post_parameters()
+        alongside a with-arguments form of sensitive_variables().
+        """
+        with self.settings(DEBUG=True):
+            self.verify_unsafe_response(partially_sensitive_view)
+            self.verify_unsafe_email(partially_sensitive_view)
+
+        with self.settings(DEBUG=False):
+            self.verify_paranoid_response(partially_sensitive_view)
+            self.verify_paranoid_email(partially_sensitive_view)
 
     def test_multivalue_dict_key_error(self):
         """

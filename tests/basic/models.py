@@ -1,9 +1,3 @@
-"""
-Bare-bones model
-
-This is a basic model with only two non-primary-key fields.
-"""
-
 import uuid
 
 from django.db import models
@@ -57,5 +51,39 @@ class PrimaryKeyWithDbDefault(models.Model):
     uuid = models.IntegerField(primary_key=True, db_default=1)
 
 
+class PrimaryKeyWithFalseyDefault(models.Model):
+    uuid = models.IntegerField(primary_key=True, default=0)
+
+
+class PrimaryKeyWithFalseyDbDefault(models.Model):
+    uuid = models.IntegerField(primary_key=True, db_default=0)
+
+
 class ChildPrimaryKeyWithDefault(PrimaryKeyWithDefault):
     pass
+
+
+# RemovedInDjango2028Warning.
+class FromDbOldSignature(models.Model):
+    name = models.CharField(max_length=20)
+
+    @classmethod
+    def from_db(cls, db, field_names, values):
+        instance = super().from_db(db, field_names, values)
+        instance._loaded_values = dict(zip(field_names, values))
+        return instance
+
+
+# RemovedInDjango2028Warning.
+class FromDbOldSignatureRelated(models.Model):
+    old = models.ForeignKey(FromDbOldSignature, models.CASCADE)
+
+
+class FromDbNewSignature(models.Model):
+    name = models.CharField(max_length=20)
+
+    @classmethod
+    def from_db(cls, db, field_names, values, *, fetch_mode=None):
+        instance = super().from_db(db, field_names, values, fetch_mode=fetch_mode)
+        instance._from_db_fetch_mode = fetch_mode
+        return instance

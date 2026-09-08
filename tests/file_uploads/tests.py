@@ -14,6 +14,7 @@ from django.core.exceptions import SuspiciousFileOperation
 from django.core.files import temp as tempfile
 from django.core.files.storage import default_storage
 from django.core.files.uploadedfile import SimpleUploadedFile, UploadedFile
+from django.core.handlers.wsgi import WSGIRequest
 from django.http.multipartparser import (
     FILE,
     MAX_TOTAL_HEADER_SIZE,
@@ -172,19 +173,23 @@ class FileUploadTests(TestCase):
         )
         payload.write(b"\r\n!\r\n")
         payload.write("--" + client.BOUNDARY + "--\r\n")
-        r = {
-            "CONTENT_LENGTH": len(payload),
-            "CONTENT_TYPE": client.MULTIPART_CONTENT,
-            "PATH_INFO": "/echo_content/",
-            "REQUEST_METHOD": "POST",
-            "wsgi.input": payload,
-        }
-        response = self.client.request(**r)
-        self.assertEqual(response.json()["file"], "")
+        request = WSGIRequest(
+            {
+                "CONTENT_LENGTH": len(payload),
+                "CONTENT_TYPE": client.MULTIPART_CONTENT,
+                "PATH_INFO": "/echo_content/",
+                "REQUEST_METHOD": "POST",
+                "wsgi.input": payload,
+            }
+        )
+        msg = "Could not decode base64 data."
+        with self.assertRaisesMessage(MultiPartParserError, msg):
+            request.POST
 
     def test_unicode_file_name(self):
         with sys_tempfile.TemporaryDirectory() as temp_dir:
-            # This file contains Chinese symbols and an accented char in the name.
+            # This file contains Chinese symbols and an accented char in the
+            # name.
             with open(os.path.join(temp_dir, UNICODE_FILENAME), "w+b") as file1:
                 file1.write(b"b" * (2**10))
                 file1.seek(0)
@@ -372,12 +377,14 @@ class FileUploadTests(TestCase):
         self.assertEqual(received["file"], "non-printable_chars.txt")
 
     def test_dangerous_file_names(self):
-        """Uploaded file names should be sanitized before ever reaching the view."""
+        """
+        Uploaded file names should be sanitized before ever reaching the view.
+        """
         # This test simulates possible directory traversal attacks by a
-        # malicious uploader We have to do some monkeybusiness here to construct
-        # a malicious payload with an invalid file name (containing os.sep or
-        # os.pardir). This similar to what an attacker would need to do when
-        # trying such an attack.
+        # malicious uploader We have to do some monkeybusiness here to
+        # construct a malicious payload with an invalid file name (containing
+        # os.sep or os.pardir). This similar to what an attacker would need to
+        # do when trying such an attack.
         payload = client.FakePayload()
         for i, name in enumerate(CANDIDATE_TRAVERSAL_FILE_NAMES):
             payload.write(
@@ -402,14 +409,18 @@ class FileUploadTests(TestCase):
             "wsgi.input": payload,
         }
         response = self.client.request(**r)
-        # The filenames should have been sanitized by the time it got to the view.
+        # The filenames should have been sanitized by the time it got to the
+        # view.
         received = response.json()
         for i, name in enumerate(CANDIDATE_TRAVERSAL_FILE_NAMES):
             got = received["file%s" % i]
             self.assertEqual(got, "hax0rd.txt")
 
     def test_filename_overflow(self):
-        """File names over 256 characters (dangerous on some platforms) get fixed up."""
+        """
+        File names over 256 characters (dangerous on some platforms) get fixed
+        up.
+        """
         long_str = "f" * 300
         cases = [
             # field name, filename, expected
@@ -740,8 +751,9 @@ class FileUploadTests(TestCase):
 
         # Maybe this is a little more complicated that it needs to be; but if
         # the django.test.client.FakePayload.read() implementation changes then
-        # this test would fail.  So we need to know exactly what kind of error
-        # it raises when there is an attempt to read more than the available bytes:
+        # this test would fail. So we need to know exactly what kind of error
+        # it raises when there is an attempt to read more than the available
+        # bytes:
         try:
             client.FakePayload(b"a").read(2)
         except Exception as err:
@@ -792,8 +804,7 @@ class FileUploadTests(TestCase):
             "multipart/form-data; boundary=%(boundary)s" % vars,
         )
         self.assertEqual(response.status_code, 200)
-        id = int(response.content)
-        obj = FileModel.objects.get(pk=id)
+        obj = FileModel.objects.get(pk=response.content.decode())
         # The name of the file uploaded and the file stored in the server-side
         # shouldn't differ.
         self.assertEqual(os.path.basename(obj.testfile.path), "MiXeD_cAsE.txt")

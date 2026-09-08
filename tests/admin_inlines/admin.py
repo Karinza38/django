@@ -296,6 +296,7 @@ class PollAdmin(admin.ModelAdmin):
 class ChapterInline(admin.TabularInline):
     model = Chapter
     readonly_fields = ["call_me"]
+    delete_confirmation_max_display = 3
 
     def call_me(self, obj):
         return "Callable in ChapterInline"
@@ -358,6 +359,7 @@ class BinaryTreeAdmin(admin.TabularInline):
 # admin for #19524
 class SightingInline(admin.TabularInline):
     model = Sighting
+    show_change_link = True
 
 
 # admin and form for #18263
@@ -517,7 +519,7 @@ site.register(ParentModelWithCustomPk, inlines=[ChildModel1Inline, ChildModel2In
 site.register(BinaryTree, inlines=[BinaryTreeAdmin])
 site.register(ExtraTerrestrial, inlines=[SightingInline])
 site.register(SomeParentModel, inlines=[SomeChildModelInline])
-site.register([Question, Inner4Stacked, Inner4Tabular])
+site.register([Question, Inner4Stacked, Inner4Tabular, Sighting])
 site.register(Teacher, TeacherAdmin)
 site.register(Chapter, inlines=[FootNoteNonEditableInlineCustomForm])
 site.register(OutfitItem, inlines=[WeaknessInlineCustomForm])

@@ -59,7 +59,10 @@ from django.utils.translation.reloader import (
     translation_file_changed,
     watch_for_translation_changes,
 )
-from django.utils.translation.trans_real import LANGUAGE_CODE_MAX_LENGTH
+from django.utils.translation.trans_real import (
+    LANGUAGE_CODE_MAX_LENGTH,
+    translation_catalog_exists,
+)
 
 from .forms import CompanyForm, I18nForm, SelectDateForm
 from .models import Company, TestModel
@@ -92,7 +95,8 @@ class TranslationTests(SimpleTestCase):
     @translation.override("fr")
     def test_plural(self):
         """
-        Test plurals with ngettext. French differs from English in that 0 is singular.
+        Test plurals with ngettext. French differs from English in that 0 is
+        singular.
         """
         self.assertEqual(
             ngettext("%(num)d year", "%(num)d years", 0) % {"num": 0},
@@ -119,9 +123,9 @@ class TranslationTests(SimpleTestCase):
     @translation.override("fr")
     def test_multiple_plurals_per_language(self):
         """
-        Normally, French has 2 plurals. As other/locale/fr/LC_MESSAGES/django.po
-        has a different plural equation with 3 plurals, this tests if those
-        plural are honored.
+        Normally, French has 2 plurals. As
+        other/locale/fr/LC_MESSAGES/django.po has a different plural equation
+        with 3 plurals, this tests if those plural are honored.
         """
         self.assertEqual(ngettext("%d singular", "%d plural", 0) % 0, "0 pluriel1")
         self.assertEqual(ngettext("%d singular", "%d plural", 1) % 1, "1 singulier")
@@ -415,8 +419,8 @@ class TranslationTests(SimpleTestCase):
     @override_settings(LOCALE_PATHS=extended_locale_paths)
     def test_safe_status(self):
         """
-        Translating a string requiring no auto-escaping with gettext or pgettext
-        shouldn't change the "safe" status.
+        Translating a string requiring no auto-escaping with gettext or
+        pgettext shouldn't change the "safe" status.
         """
         trans_real._active = Local()
         trans_real._translations = {}
@@ -1157,6 +1161,47 @@ class FormattingTests(SimpleTestCase):
                 ),
             )
 
+    def test_uncommon_locale_formats(self):
+        testcases = {
+            # French Canadian locale uses 'h' as time format separator.
+            ("fr-ca", time_format, (self.t, "TIME_FORMAT")): "10\xa0h\xa015",
+            (
+                "fr-ca",
+                date_format,
+                (self.dt, "DATETIME_FORMAT"),
+            ): "31 décembre 2009, 20\xa0h\xa050",
+            (
+                "fr-ca",
+                date_format,
+                (self.dt, "SHORT_DATETIME_FORMAT"),
+            ): "2009-12-31 20\xa0h\xa050",
+        }
+        for testcase, expected in testcases.items():
+            locale, format_function, format_args = testcase
+            with self.subTest(locale=locale, expected=expected):
+                with translation.override(locale, deactivate=True):
+                    self.assertEqual(expected, format_function(*format_args))
+
+    def test_basque_date_formats(self):
+        # Basque locale uses parenthetical suffixes for conditional declension:
+        # (e)ko for years and declined month/day forms.
+        with translation.override("eu", deactivate=True):
+            self.assertEqual(date_format(self.d), "2009(e)ko abe.k 31")
+            self.assertEqual(
+                date_format(self.dt, "DATETIME_FORMAT"),
+                "2009(e)ko abe.k 31, 20:50",
+            )
+            self.assertEqual(
+                date_format(self.d, "YEAR_MONTH_FORMAT"), "2009(e)ko abendua"
+            )
+            self.assertEqual(date_format(self.d, "MONTH_DAY_FORMAT"), "abenduaren 31a")
+            # Day 11 (hamaika in Basque) ends in 'a' as a word, but the
+            # numeral form does not, so appending 'a' is correct here.
+            self.assertEqual(
+                date_format(datetime.date(2009, 12, 11), "MONTH_DAY_FORMAT"),
+                "abenduaren 11a",
+            )
+
     def test_sub_locales(self):
         """
         Check if sublocales fall back to the main locale
@@ -1278,8 +1323,8 @@ class FormattingTests(SimpleTestCase):
         self.assertEqual(sanitize_separators(123), 123)
 
         with translation.override("ru", deactivate=True):
-            # Russian locale has non-breaking space (\xa0) as thousand separator
-            # Usual space is accepted too when sanitizing inputs
+            # Russian locale has non-breaking space (\xa0) as thousand
+            # separator Usual space is accepted too when sanitizing inputs
             with self.settings(USE_THOUSAND_SEPARATOR=True):
                 self.assertEqual(sanitize_separators("1\xa0234\xa0567"), "1234567")
                 self.assertEqual(sanitize_separators("77\xa0777,777"), "77777.777")
@@ -1347,7 +1392,8 @@ class FormattingTests(SimpleTestCase):
     def test_iter_format_modules_stability(self):
         """
         Tests the iter_format_modules function always yields format modules in
-        a stable and correct order in presence of both base ll and ll_CC formats.
+        a stable and correct order in presence of both base ll and ll_CC
+        formats.
         """
         en_format_mod = import_module("django.conf.locale.en.formats")
         en_gb_format_mod = import_module("django.conf.locale.en_GB.formats")
@@ -1364,7 +1410,8 @@ class FormattingTests(SimpleTestCase):
 
     def test_localize_templatetag_and_filter(self):
         """
-        Test the {% localize %} templatetag and the localize/unlocalize filters.
+        Test the {% localize %} templatetag and the localize/unlocalize
+        filters.
         """
         context = Context(
             {"int": 1455, "float": 3.14, "date": datetime.date(2016, 12, 31)}
@@ -1618,11 +1665,11 @@ class MiscTests(SimpleTestCase):
     )
     def test_support_for_deprecated_chinese_language_codes(self):
         """
-        Some browsers (Firefox, IE, etc.) use deprecated language codes. As these
-        language codes will be removed in Django 1.9, these will be incorrectly
-        matched. For example zh-tw (traditional) will be interpreted as zh-hans
-        (simplified), which is wrong. So we should also accept these deprecated
-        language codes.
+        Some browsers (Firefox, IE, etc.) use deprecated language codes. As
+        these language codes will be removed in Django 1.9, these will be
+        incorrectly matched. For example zh-tw (traditional) will be
+        interpreted as zh-hans (simplified), which is wrong. So we should also
+        accept these deprecated language codes.
 
         refs #18419 -- this is explicitly for browser compatibility
         """
@@ -1915,8 +1962,8 @@ class TestLanguageInfo(SimpleTestCase):
 
     def test_fallback_language_code(self):
         """
-        get_language_info return the first fallback language info if the lang_info
-        struct does not contain the 'name' key.
+        get_language_info return the first fallback language info if the
+        lang_info struct does not contain the 'name' key.
         """
         li = get_language_info("zh-my")
         self.assertEqual(li["code"], "zh-hans")
@@ -1963,7 +2010,8 @@ class UnprefixedDefaultLanguageTests(SimpleTestCase):
     def test_default_lang_without_prefix(self):
         """
         With i18n_patterns(..., prefix_default_language=False), the default
-        language (settings.LANGUAGE_CODE) should be accessible without a prefix.
+        language (settings.LANGUAGE_CODE) should be accessible without a
+        prefix.
         """
         response = self.client.get("/simple/")
         self.assertEqual(response.content, b"Yes")
@@ -1990,8 +2038,8 @@ class UnprefixedDefaultLanguageTests(SimpleTestCase):
     def test_no_redirect_on_404(self):
         """
         A request for a nonexistent URL shouldn't cause a redirect to
-        /<default_language>/<request_url> when prefix_default_language=False and
-        /<default_language>/<request_url> has a URL match (#27402).
+        /<default_language>/<request_url> when prefix_default_language=False
+        and /<default_language>/<request_url> has a URL match (#27402).
         """
         # A match for /group1/group2/ must exist for this to act as a
         # regression test.
@@ -2035,6 +2083,25 @@ class CountrySpecificLanguageTests(SimpleTestCase):
         self.assertFalse(check_for_language("tr-TR.UTF-8"))
         self.assertFalse(check_for_language("tr-TR.UTF8"))
         self.assertFalse(check_for_language("de-DE.utf-8"))
+
+    def test_check_for_language_lang_code_max_length(self):
+        self.addCleanup(translation_catalog_exists.cache_clear)
+
+        # Overly long codes are rejected before the cached lookup, so they are
+        # not retained as cache keys, potentially consuming too much memory.
+        # Codes at the maximum length can reach the cached lookup.
+        for length, cache_size in [
+            (LANGUAGE_CODE_MAX_LENGTH - 1, 1),
+            (LANGUAGE_CODE_MAX_LENGTH, 1),
+            (LANGUAGE_CODE_MAX_LENGTH + 1, 0),
+        ]:
+            translation_catalog_exists.cache_clear()
+            with self.subTest(length=length):
+                self.assertIs(check_for_language("a" * length), False)
+                self.assertEqual(
+                    translation_catalog_exists.cache_info().currsize,
+                    cache_size,
+                )
 
     def test_check_for_language_null(self):
         self.assertIs(trans_null.check_for_language("en"), True)

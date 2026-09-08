@@ -43,6 +43,11 @@ class CompositePKChecksTests(TestCase):
         with self.assertRaisesMessage(ValueError, expected_message):
             models.CompositePrimaryKey("tenant_id", "id", db_default=models.F("id"))
 
+    def test_composite_pk_cannot_have_a_db_column(self):
+        expected_message = "CompositePrimaryKey cannot have a db_column."
+        with self.assertRaisesMessage(ValueError, expected_message):
+            models.CompositePrimaryKey("tenant_id", "id", db_column="tenant_pk")
+
     def test_composite_pk_cannot_be_editable(self):
         expected_message = "CompositePrimaryKey cannot be editable."
         with self.assertRaisesMessage(ValueError, expected_message):
@@ -242,3 +247,59 @@ class CompositePKChecksTests(TestCase):
                 ),
             ],
         )
+
+    def test_composite_pk_cannot_include_non_local_field(self):
+        class Foo(models.Model):
+            a = models.SmallIntegerField()
+
+        class Bar(Foo):
+            pk = models.CompositePrimaryKey("a", "b")
+            b = models.SmallIntegerField()
+
+        self.assertEqual(Foo.check(databases=self.databases), [])
+        self.assertEqual(
+            Bar.check(databases=self.databases),
+            [
+                checks.Error(
+                    "'a' cannot be included in the composite primary key.",
+                    hint="'a' field is not a local field.",
+                    obj=Bar,
+                    id="models.E042",
+                ),
+            ],
+        )
+
+    def test_proxy_model_can_subclass_model_with_composite_pk(self):
+        class Foo(models.Model):
+            pk = models.CompositePrimaryKey("a", "b")
+            a = models.SmallIntegerField()
+            b = models.SmallIntegerField()
+
+        class Bar(Foo):
+            class Meta:
+                proxy = True
+
+        self.assertEqual(Foo.check(databases=self.databases), [])
+        self.assertEqual(Bar.check(databases=self.databases), [])
+
+    def test_proxy_model_does_not_check_superclass_composite_pk_errors(self):
+        class Foo(models.Model):
+            pk = models.CompositePrimaryKey("a", "b")
+            a = models.SmallIntegerField()
+
+        class Bar(Foo):
+            class Meta:
+                proxy = True
+
+        self.assertEqual(
+            Foo.check(databases=self.databases),
+            [
+                checks.Error(
+                    "'b' cannot be included in the composite primary key.",
+                    hint="'b' is not a valid field.",
+                    obj=Foo,
+                    id="models.E042",
+                ),
+            ],
+        )
+        self.assertEqual(Bar.check(databases=self.databases), [])

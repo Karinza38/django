@@ -25,6 +25,10 @@ class ObjectDoesNotExist(Exception):
     silent_variable_failure = True
 
 
+class ObjectNotUpdated(Exception):
+    """The updated object no longer exists."""
+
+
 class MultipleObjectsReturned(Exception):
     """The query returned multiple objects when only one was expected."""
 
@@ -54,7 +58,7 @@ class DisallowedHost(SuspiciousOperation):
 
 
 class DisallowedRedirect(SuspiciousOperation):
-    """Redirect to scheme not in allowed list"""
+    """Redirect was too long or scheme was not in allowed list."""
 
     pass
 
@@ -124,6 +128,12 @@ class ImproperlyConfigured(Exception):
 
 class FieldError(Exception):
     """Some kind of problem with a model field."""
+
+    pass
+
+
+class FieldFetchBlocked(FieldError):
+    """On-demand fetching of a model field blocked."""
 
     pass
 
@@ -244,7 +254,7 @@ class EmptyResultSet(Exception):
 
 
 class FullResultSet(Exception):
-    """A database query predicate is matches everything."""
+    """A database query predicate that matches everything."""
 
     pass
 

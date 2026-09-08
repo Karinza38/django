@@ -1,8 +1,14 @@
 from .custom_permissions import CustomPermissionsUser
-from .custom_user import CustomUser, CustomUserWithoutIsActiveField, ExtensionUser
+from .custom_user import (
+    CustomUser,
+    CustomUserCompositePrimaryKey,
+    CustomUserWithoutIsActiveField,
+    ExtensionUser,
+)
 from .invalid_models import CustomUserNonUniqueUsername
 from .is_active import IsActiveTestUser1
 from .minimal import MinimalUser
+from .no_natural_key import CustomUserNoNaturalKey
 from .no_password import NoPasswordUser
 from .proxy import Proxy, UserProxy
 from .uuid_pk import UUIDUser
@@ -17,6 +23,8 @@ __all__ = (
     "CustomEmailField",
     "CustomPermissionsUser",
     "CustomUser",
+    "CustomUserCompositePrimaryKey",
+    "CustomUserNoNaturalKey",
     "CustomUserNonUniqueUsername",
     "CustomUserWithFK",
     "CustomUserWithM2M",
